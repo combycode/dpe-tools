@@ -1,0 +1,12 @@
+{
+  "name": "mongo-upsert",
+  "version": "0.1.0",
+  "description": "Streaming MongoDB upsert. Each envelope -> updateOne with a configurable mix of $set, $addToSet, $push, $inc, $unset applied atomically. Bulk-writes supported via bulk_size. Idempotency: prefer $set + $addToSet to remain replay-safe; $push/$inc are not idempotent.",
+  "runtime": "rust",
+  "entry": "target/release/mongo-upsert",
+  "spec": "spec.yaml",
+  "run":   "cargo run --release --",
+  "build": "cargo build --release",
+  "test":  "cargo test",
+  "test_skipped": true
+}

@@ -1,0 +1,3 @@
+chromium/7811
+updated_at: 2026-04-28T22:17:33Z
+source: https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium/7811

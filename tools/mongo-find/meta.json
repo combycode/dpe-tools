@@ -1,0 +1,12 @@
+{
+  "name": "mongo-find",
+  "version": "0.1.0",
+  "description": "Reads MongoDB documents. Mode 'once': run a single find at startup, emit all matching docs. Mode 'per_input': for each input envelope, run a parametrised find and emit results. Each emitted envelope has v = the found document.",
+  "runtime": "rust",
+  "entry": "target/release/mongo-find",
+  "spec": "spec.yaml",
+  "run":   "cargo run --release --",
+  "build": "cargo build --release",
+  "test":  "cargo test",
+  "test_skipped": true
+}

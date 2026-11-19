@@ -1,0 +1,11 @@
+{
+  "name": "validate",
+  "version": "0.1.0",
+  "description": "JSON Schema validator. Mark mode tags every envelope with _valid + _validation_error; filter mode drops invalid to errors log.",
+  "runtime": "rust",
+  "entry": "target/release/validate",
+  "spec": "spec.yaml",
+  "run":   "cargo run --release --",
+  "build": "cargo build --release",
+  "test":  "cargo test"
+}

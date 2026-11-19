@@ -1,0 +1,109 @@
+name: "read-tables"
+runtime: "rust"
+description: "Reads tables from sheet JSON (as produced by `xlsx`). Finds table rectangles by matching format templates loaded once at startup. Three modes: parse (emit one envelope per data row), tables (extract each table to a file, emit one envelope per table), detect (discover format candidates by scanning shapes)."
+
+settings:
+  type: object
+  additionalProperties: false
+  properties:
+    formats:
+      type: string
+      required: true
+      description: "Path to a directory containing .tpl format template files."
+    mode:
+      type: string
+      enum: ["parse", "tables", "detect"]
+      default: "parse"
+      description: |
+        parse = match templates, emit one envelope per data row (legacy default).
+        tables = match templates, EXTRACT each table to a file under
+                 `extract.dir`, emit one envelope per TABLE (no per-row
+                 envelopes). Same matcher, same identifying fields, same
+                 passthrough rule — just a different form factor where the
+                 actual data rows live on disk and the envelope carries the
+                 file path.
+        detect = scan sheets without templates, emit candidate format
+                 templates for new layouts. Writes to `output` (string).
+    output:
+      type: string
+      default: "."
+      description: "Used in detect mode as the directory to write candidate format reports into. Ignored in parse and tables modes."
+    extract:
+      type: object
+      additionalProperties: false
+      description: "Required when `mode = tables`. Where and in what format to write extracted tables."
+      properties:
+        dir:
+          type: string
+          required: true
+          description: "Folder where extracted table files are written. Filenames are auto-derived: `<source-stem>__<sanitized-sheet>__t<table-idx>.<ext>`."
+        format:
+          type: string
+          enum: ["csv", "ndjson", "ndjson-compact"]
+          default: "ndjson"
+          description: |
+            csv             = RFC-4180 with header row.
+            ndjson          = one JSON object per line; each line has the
+                              EXACT same shape as the row-mode envelope's `v`
+                              (all metadata duplicated per row).
+            ndjson-compact  = first line is the header array; subsequent
+                              lines are value arrays in column order.
+    passthrough_input:
+      type: boolean
+      default: false
+      description: |
+        When true, every field on the input envelope's `v` (except keys
+        read-tables consumes itself: `path`, `sheet`, `source_file`,
+        `source_path`, `source_relative`) is copied onto every emitted
+        envelope. Use this to attach upstream tags (e.g. label /
+        batch / category) without a downstream `normalize add_field`
+        step. Applies to both parse mode (every per-row envelope) and
+        tables mode (each per-table envelope, AND every line of an
+        `ndjson` (full) extract file). read-tables's own fields (`row`,
+        `columns`, `sheet`, `source_*`, etc.) take precedence on key
+        collision.
+
+input:
+  description: "One envelope per sheet to process."
+  properties:
+    path:
+      type: string
+      required: true
+      description: "Path to a sheet JSON file (typically produced by xlsx)."
+    sheet:
+      type: string
+      description: "Sheet name (informational; used in output records for provenance)."
+
+output:
+  description: |
+    Shape depends on mode:
+      parse  → one envelope per matched data row (legacy default).
+      tables → one envelope per matched table; row data lives in `target` file.
+      detect → meta envelopes describing detected shapes (no data envelopes).
+  properties:
+    # Identifying fields — emitted in BOTH parse and tables modes:
+    sheet:           { type: string,  description: "Source sheet name." }
+    table:           { type: integer, description: "Index of the matched table within the sheet (0-based)." }
+    format:          { type: string,  description: "Name of the matched template." }
+    title:           { type: string,  description: "Title cell text if the template defines one." }
+    columns:         { type: array,   description: "Header values in column order (flattened, same in both modes)." }
+    col_start:       { type: integer, description: "0-based first column of the table." }
+    col_end:         { type: integer, description: "0-based last column of the table (inclusive)." }
+    row_start:       { type: integer, description: "1-based first row of the table (header row)." }
+    row_end:         { type: integer, description: "1-based last data row." }
+    source_file:     { type: string,  description: "When upstream provided it." }
+    source_path:     { type: string,  description: "When upstream provided it." }
+    source_relative: { type: string,  description: "When upstream provided it." }
+    # Parse-mode-only:
+    row:             { type: array,   description: "PARSE MODE ONLY: data values in column order. ONE envelope per row." }
+    row_idx:         { type: integer, description: "PARSE MODE ONLY: 1-based row number in source sheet." }
+    # Tables-mode-only:
+    target:          { type: string,  description: "TABLES MODE ONLY: path to the extracted file (csv / ndjson / ndjson-compact)." }
+    range:           { type: string,  description: "TABLES MODE ONLY: A1-style readable range label (e.g. `A1:F25`). Bounds also available as col_start/col_end/row_start/row_end." }
+
+# Template grammar (per-file, in `formats/<name>.tpl`):
+#   title     : merge
+#   header    : text+
+#   subheader?: text+
+#   data*     : any ...
+#   total~    : period|total|sparse|sum

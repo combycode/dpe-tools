@@ -1,0 +1,11 @@
+{
+  "name": "read-tables",
+  "version": "0.1.0",
+  "description": "Reads tables from sheet JSON: finds table rectangles via format templates, extracts data rows. Modes: parse (emit rows) / detect (discover formats).",
+  "runtime": "rust",
+  "entry": "target/release/read-tables",
+  "spec": "spec.yaml",
+  "run":   "cargo run --release --",
+  "build": "cargo build --release",
+  "test":  "cargo test"
+}

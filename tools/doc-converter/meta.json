@@ -1,0 +1,12 @@
+{
+  "name": "doc-converter",
+  "version": "0.1.0",
+  "description": "Convert PDF/DOCX/image documents to any format via LLM vision, page-by-page with prompt layering.",
+  "runtime": "rust",
+  "entry": "target/release/doc-converter",
+  "spec": "spec.yaml",
+  "run":   "cargo run --release --",
+  "build": "cargo build --release",
+  "test":  "cargo test",
+  "test_exclusive": true
+}

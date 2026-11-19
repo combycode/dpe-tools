@@ -1,0 +1,67 @@
+name: "mongo-upsert"
+runtime: "rust"
+description: "Streaming MongoDB upsert. Each envelope produces one updateOne with a configurable mix of operators ($set, $addToSet, $push, $inc, $unset) applied atomically. Supports bulk batching. Emits each input envelope downstream unchanged so the tool can sit mid-pipeline."
+
+settings:
+  type: object
+  additionalProperties: false
+  properties:
+    uri:
+      type: string
+      required: true
+      description: "Mongo connection URI."
+    db:
+      type: string
+      required: true
+    collection:
+      type: string
+      required: true
+    key:
+      type: object
+      additionalProperties: { type: string }
+      required: true
+      description: "Filter document. Each value is a dotted path expression resolved per envelope (e.g. `{order_id: \"v.order_id\"}`). Constants are passed through unchanged."
+    operations:
+      type: array
+      required: true
+      minItems: 1
+      items:
+        type: object
+        additionalProperties: false
+        properties:
+          op:
+            type: string
+            enum: ["$set", "$addToSet", "$push", "$inc", "$unset"]
+          path:
+            type: string
+            description: "Dot-path inside the document, e.g. `stats.daily` or `tags`."
+          value:
+            type: string
+            description: "Path expression to the value (e.g. `v.amount`). Ignored for $unset."
+          literal:
+            description: "Literal value override. If both `value` and `literal` are set, `literal` wins. Useful for fixed timestamps or counters."
+        required: ["op", "path"]
+      description: "Update operations, applied together in one updateOne call."
+    upsert:
+      type: boolean
+      default: true
+    bulk_size:
+      type: integer
+      minimum: 1
+      default: 500
+      description: "Envelopes per batch flush (concurrent updateOne calls). 1 disables batching (one round-trip per envelope)."
+    on_error:
+      type: string
+      enum: ["trace", "drop", "fail"]
+      default: "trace"
+      description: "trace = log + continue; drop = silently skip; fail = terminate."
+
+input:
+  description: "Any envelope. Each envelope produces one updateOne in the bulk batch."
+
+output:
+  description: "Pass-through. Each input envelope is emitted unchanged after its update is enqueued (NOT after it commits)."
+
+# Idempotency note: prefer $set + $addToSet + $unset (replay-safe).
+# $push and $inc are NOT idempotent; rerunning the same envelope will
+# duplicate pushes / re-increment.

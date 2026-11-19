@@ -1,0 +1,24 @@
+{
+  "name": "@combycode/dpe-tool-llm",
+  "version": "0.1.1",
+  "description": "DPE tool: text-in / text-or-json-out LLM call. Anthropic + Google via native fetch.",
+  "license": "AGPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/combycode/dpe-tools"
+  },
+  "type": "module",
+  "main": "src/main.ts",
+  "scripts": {
+    "test": "bun test",
+    "start": "bun src/main.ts"
+  },
+  "dependencies": {
+    "@combycode/dpe-framework-ts": "^2.0.4"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4",
+    "@types/node": "^24.19.2",
+    "typescript": "^7.0.2"
+  }
+}

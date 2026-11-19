@@ -1,0 +1,30 @@
+[package]
+name        = "combycode-dpe-tool-mongo-find"
+version     = "0.1.0"
+edition     = "2021"
+description = "DPE tool: stream MongoDB documents as envelopes; query once on start or once per input envelope."
+license     = "AGPL-3.0-or-later"
+repository  = "https://github.com/combycode/dpe-tools"
+homepage    = "https://github.com/combycode/dpe-tools"
+readme      = "README.md"
+
+[[bin]]
+name = "mongo-find"
+path = "src/main.rs"
+
+[dependencies]
+combycode-dpe = "2"
+serde         = { version = "1", features = ["derive"] }
+# preserve_order: emitted JSON keeps input key order (was implied by bson 2 until bson 3).
+serde_json    = { version = "1", features = ["preserve_order"] }
+mongodb       = { version = "3", default-features = false, features = ["compat-3-3-0", "bson-3", "rustls-tls"] }
+bson          = { version = "3", features = ["serde", "serde_json-1"] }
+futures       = "0.3"
+tokio         = { version = "1", features = ["full"] }
+thiserror     = "2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

@@ -1,0 +1,46 @@
+[package]
+name        = "combycode-dpe-tool-doc-converter"
+version     = "0.1.1"
+edition     = "2021"
+description = "DPE tool: convert PDF/DOCX/image documents to any text format via LLM vision, page-by-page with prompt layering."
+license     = "AGPL-3.0-or-later"
+repository  = "https://github.com/combycode/dpe-tools"
+homepage    = "https://github.com/combycode/dpe-tools"
+readme      = "README.md"
+
+[[bin]]
+name = "doc-converter"
+path = "src/main.rs"
+
+[dependencies]
+combycode-dpe = "2"
+serde         = { version = "1", features = ["derive"] }
+# preserve_order: emitted JSON keeps input key order (was implied by bson 2 until bson 3).
+serde_json    = { version = "1", features = ["preserve_order"] }
+serde-saphyr  = "2.2"
+tokio         = { version = "1", features = ["full"] }
+reqwest       = { version = "0.13", features = ["json", "rustls-no-provider"], default-features = false }
+rustls        = { version = "0.23", default-features = false, features = ["ring", "std"] }
+webpki-root-certs = "1"
+base64        = "0.23"
+thiserror     = "2"
+# API level pinned to the fetched pdfium release (vendor/pdfium/VERSION.txt, chromium/7811):
+# pdfium_7763 is the newest pdfium-render API level not above it.
+pdfium-render = { version = "0.9", default-features = false, features = ["thread_safe", "image_latest", "pdfium_7763"] }
+image         = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
+anyhow        = "1"
+async-trait   = "0.1"
+# `futures::stream::buffer_unordered` for the per-page parallel
+# dispatch (Phase 2). Idiomatic bounded-concurrency primitive; matches
+# the "stream of N futures, cap M in flight" shape better than a
+# tokio::sync::Semaphore.
+futures       = "0.3"
+# Per-invocation LibreOffice UserInstallation profile dir (see docx.rs).
+# Auto-deleted on Drop, no cross-run buildup.
+tempfile      = "3"
+
+[dev-dependencies]
+wiremock = "0.6"
+
+[lints]
+workspace = true

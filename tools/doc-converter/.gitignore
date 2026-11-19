@@ -1,0 +1,3 @@
+
+# pdfium libraries are fetched by scripts/fetch-pdfium.sh, not committed
+/vendor/pdfium/*/

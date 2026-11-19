@@ -1,0 +1,45 @@
+name: "classify"
+runtime: "bun"
+description: "Universal rule-based classifier. Applies ordered JS-expression rules against configurable dictionaries to attach `{className, confidence, reason, data}` to each envelope. The rule body is plain JS; bindings expose dictionary lookups, hashing, and a configurable item path."
+
+settings:
+  type: object
+  additionalProperties: false
+  properties:
+    classes:
+      type: string
+      description: "Optional path to a TSV/CSV/JSON dictionary of valid class names. When set, also exposed as `dicts.classes` in rule bindings."
+    dicts:
+      type: object
+      additionalProperties:
+        oneOf:
+          - { type: string }
+          - { type: object, properties: { path: { type: string }, key: { type: string } } }
+      description: "Named dictionaries available to rules as `dicts.<name>.lookup(key)`. Each entry is either a path string or an object `{path, key}`."
+    rules:
+      type: array
+      minItems: 1
+      items:
+        oneOf:
+          - { type: string, description: "Path to a .js or .json file containing rule definitions." }
+          - type: object
+            additionalProperties: false
+            properties:
+              name:       { type: string }
+              confidence: { type: integer, minimum: 0, maximum: 100 }
+              expr:       { type: string,  description: "JS expression body (or function body when it contains `return`)." }
+            required: ["expr"]
+      description: "Ordered list of rules. First match wins. Mix file paths and inline definitions."
+    source:
+      type: string
+      description: "Dot-path into envelope.v selecting the item passed to rules. Defaults to the whole `v`."
+    target:
+      type: string
+      default: "class"
+      description: "Dot-path on envelope.v where the classification result is written."
+
+input:
+  description: "Any envelope. Rules read `item` resolved from `settings.source`."
+
+output:
+  description: "Same envelope with `v[settings.target] = {className, confidence, reason, data}` written. Pass-through if no rule matches (className=null, confidence=0)."

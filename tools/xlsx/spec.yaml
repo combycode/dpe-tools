@@ -1,0 +1,71 @@
+name: "xlsx"
+runtime: "rust"
+description: "XLSX file extractor. Per input envelope (one xlsx file path), emits one envelope per produced sheet JSON, plus a meta.json describing the document. No streaming inside a single sheet; the unit of work is a sheet."
+
+settings:
+  type: object
+  additionalProperties: false
+  properties: {}
+  description: "No settings - all configuration is per-envelope (see input)."
+
+input:
+  description: "Per envelope: path of an .xlsx file plus where to write extracted sheets."
+  properties:
+    path:
+      type: string
+      required: true
+      description: "Absolute path to the .xlsx file."
+    file:
+      type: string
+      description: "Alias for `path` (legacy)."
+    output:
+      type: string
+      required: true
+      description: "Output root directory. The tool writes to `<output>/<file-basename>/<SheetName>.json` plus `<output>/<file-basename>/meta.json`."
+    source_file:
+      type: string
+      description: "Provenance label baked into every emitted sheet JSON. Defaults to the basename of `path`. Recommended: scan-root-relative path so downstream tools can group by document."
+    root:
+      type: string
+      description: "Optional absolute path prefix (e.g. `$input/`). When provided AND `path` starts with it, the tool records `source_relative` (path minus root) on every output and on the per-sheet JSON header. Lets downstream stages route on the input's directory tree (category / period / label / ...) without parsing the basename. scan-fs already emits this field."
+
+output:
+  description: "One envelope per produced sheet."
+  properties:
+    path:
+      type: string
+      description: "Absolute path to the written sheet JSON file."
+    sheet:
+      type: string
+      description: "Excel sheet name."
+    source_file:
+      type: string
+      description: "Provenance label (echoed from input or derived)."
+    source_path:
+      type: string
+      description: "Absolute, forward-slash-normalised path of the input xlsx. Always present."
+    source_relative:
+      type: string
+      description: "Path of the input xlsx relative to the upstream `root`. Present iff `root` was supplied and `path` started with it."
+    rows:
+      type: integer
+      description: "Number of rows in this sheet."
+    cols:
+      type: integer
+      description: "Number of columns in this sheet."
+
+# Sheet JSON shape (written to disk, not stdout):
+#   {
+#     "source_file":      "<provenance>",
+#     "source_path":      "<absolute path>",
+#     "source_relative":  "<root-relative path>",   # optional, present iff `root` provided
+#     "sheet_name":       "<name>",
+#     "extracted_at":     "<RFC3339>",
+#     "rows": [
+#       null | [ <cell>, ... ]
+#     ]
+#   }
+# Where each cell is one of:
+#   - scalar (string | number | bool | null)
+#   - {"span": N, "v": "..."}              (horizontal merge anchor)
+#   - [<value>, "=ROUND(...)"]             (formula + computed value)

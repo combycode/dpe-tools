@@ -1,0 +1,12 @@
+{
+  "name": "llm",
+  "version": "0.1.0",
+  "description": "Universal text LLM call: Anthropic or Google, layered prompts, text or JSON output.",
+  "runtime": "bun",
+  "entry": "src/main.ts",
+  "spec":  "spec.yaml",
+  "run":   "bun src/main.ts",
+  "build": "bun install",
+  "test":  "bun test",
+  "test_exclusive": true
+}

@@ -1,0 +1,72 @@
+name: "validate"
+runtime: "rust"
+description: "JSON Schema validator. Mark mode tags every envelope with `_valid` + `_validation_error`; filter mode drops invalid envelopes to the errors log."
+
+settings:
+  type: object
+  additionalProperties: false
+  required: ["source", "schema"]
+  properties:
+    source:
+      type: string
+      description: |
+        Dotted path into the envelope identifying the value to validate.
+        `v` selects the whole `v` object. `v.response` selects `v.response`.
+        When the resolved value is a STRING, it is parsed using `format`
+        before validation. When it is already an OBJECT or ARRAY, it is
+        used directly.
+    schema:
+      type: string
+      description: |
+        Path to the JSON Schema file. Supports JSON or YAML files
+        (extension `.yaml`/`.yml` triggers YAML parsing; anything else
+        falls back to JSON). Resolved via the standard $-prefix path
+        resolver (`$configs`, `$pipeline`, etc.) by the runner before
+        the tool starts. Loaded ONCE at startup and held in memory.
+    format:
+      type: string
+      enum: ["json"]
+      default: "json"
+      description: |
+        How to parse `source` when it resolves to a string. Currently
+        `json` only. Reserved for future formats (yaml, frontmatter).
+    mode:
+      type: string
+      enum: ["mark", "filter"]
+      default: "mark"
+      description: |
+        `mark` — emit every envelope on the `data` channel after writing
+        `_valid` + `_validation_error` fields. `filter` — only emit
+        valid envelopes; invalid ones go to the stage's errors log via
+        `ctx.error()` and never reach downstream consumers.
+    mark_field:
+      type: string
+      default: "_valid"
+      description: "Boolean field name written to `v` in mark mode."
+    error_field:
+      type: string
+      default: "_validation_error"
+      description: |
+        String field name written to `v` in mark mode. Null on
+        success, otherwise a single line: `<json-pointer>: <keyword> —
+        <human detail>`.
+    additional_properties:
+      type: boolean
+      default: true
+      description: |
+        When true (default), the validator allows fields not declared
+        in the schema — it strips any root-level `additionalProperties`
+        keyword the schema may have set, then validates. When false,
+        the schema is used as-is; if it has `additionalProperties: false`
+        at the root, unknown fields will cause validation to fail.
+        Lets schema authors target only the fields they care about
+        without breaking on upstream-added envelope fields.
+
+input:
+  description: "Any envelope with the value to validate addressable via `source`."
+
+output:
+  description: |
+    Same envelope. In `mark` mode, `v.<mark_field>` and `v.<error_field>`
+    are added (or overwritten). In `filter` mode, valid envelopes pass
+    through unchanged; invalid envelopes do not appear on `data`.

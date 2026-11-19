@@ -1,0 +1,38 @@
+name: "filter"
+runtime: "bun"
+description: "Filter / map / transform an NDJSON stream via JS expressions. Companion to the runner's built-in `filter`; offers more flexible expressions and chained ops at the cost of a child-process spawn."
+
+settings:
+  type: object
+  additionalProperties: false
+  properties:
+    ops:
+      type: array
+      required: true
+      minItems: 1
+      items:
+        type: object
+        oneOf:
+          - { properties: { filter: { type: string } }, required: ["filter"], additionalProperties: false }
+          - { properties: { map:    { type: string } }, required: ["map"],    additionalProperties: false }
+      description: "Ordered list of operations. `filter` drops envelopes when expression is falsy; `map` replaces the item (drop on null/undefined return)."
+    target:
+      type: string
+      default: "row"
+      description: "Field of v that ops operate on. Use empty string or omit to operate on the whole v."
+    apply_to:
+      type: string
+      enum: ["data", "meta", "both"]
+      default: "data"
+      description: "Which envelope types reach the ops. Excluded types are dropped (NOT passed through)."
+
+input:
+  description: "Any envelope. ops see `item = v[target]` (or v itself when target empty)."
+
+output:
+  description: "Same envelope with item written back to v[target]. Envelopes that fail any filter or whose map returns null/undefined are dropped."
+
+# Expression form (filter OR map):
+#   - default: wrapped as  function(item, env, hash, now) { return (EXPR); }
+#   - if EXPR contains a `return` keyword, used as the function body verbatim
+# Bindings: item, env, hash(str), now(), plus standard JS globals.

@@ -1,0 +1,51 @@
+name: "mongo-find"
+runtime: "rust"
+description: "Reads documents from a MongoDB collection. In `once` mode the query runs a single time at startup. In `per_input` mode the query is parametrised by each input envelope (each filter value is a path expression resolved against the envelope)."
+
+settings:
+  type: object
+  additionalProperties: false
+  properties:
+    uri:
+      type: string
+      required: true
+      description: "Mongo connection URI (e.g. `mongodb://localhost:27017`)."
+    db:
+      type: string
+      required: true
+    collection:
+      type: string
+      required: true
+    mode:
+      type: string
+      enum: ["once", "per_input"]
+      default: "once"
+      description: "once = run `filter` once at startup, ignore inputs; per_input = run a find per input envelope using `filter_from`."
+    filter:
+      type: object
+      default: {}
+      description: "Literal filter document (used in mode=once). Empty = find all."
+    filter_from:
+      type: object
+      additionalProperties: { type: string }
+      description: "Per-input filter template. Each key's value is a dotted path expression resolved against the envelope (e.g. `{order_id: \"v.order_id\"}`)."
+    sort:
+      type: object
+      description: "Optional sort document, e.g. `{day: 1}` or `{day: -1}`."
+    projection:
+      type: object
+      description: "Optional projection document, e.g. `{_id: 0, name: 1}`."
+    limit:
+      type: integer
+      minimum: 1
+      description: "Optional max documents per query."
+    passthrough_input:
+      type: boolean
+      default: false
+      description: "When true, emit input envelopes as-is BEFORE the matching documents. Useful for fan-out pipelines."
+
+input:
+  description: "Any envelope. In mode=once inputs are only counted (or passed through if `passthrough_input`); in per_input mode each envelope drives one find call."
+
+output:
+  description: "One envelope per matched MongoDB document; envelope.v = the document with BSON types converted to JSON."

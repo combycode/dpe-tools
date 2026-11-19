@@ -1,0 +1,71 @@
+name: "llm"
+runtime: "bun"
+description: "Universal text LLM call. One provider call per envelope. Layered prompts (base + overlays). Output as text (preserves other v fields) or JSON (replaces v)."
+
+settings:
+  type: object
+  additionalProperties: false
+  properties:
+    provider:
+      type: string
+      enum: ["anthropic", "google"]
+      required: true
+    model:
+      type: string
+      required: true
+      description: "Provider model name."
+    temperature:
+      type: number
+      minimum: 0
+      maximum: 2
+      default: 0.0
+    max_tokens:
+      type: integer
+      minimum: 1
+      default: 64000
+    thinking_budget:
+      oneOf:
+        - { type: integer, minimum: 0 }
+        - { type: "null" }
+      description: "Optional reasoning budget for providers that support it."
+    prompts:
+      type: object
+      required: true
+      additionalProperties: false
+      properties:
+        dir:      { type: string,  required: true, description: "Directory containing prompt files." }
+        name:     { type: string,  required: true, description: "Prompt base name (filename = `<name>_<version>.txt`)." }
+        version:  { type: string,  required: true }
+        overlays: { type: array,   items: { type: string }, description: "Ordered list of overlay names applied after base." }
+    overlay_defaults:
+      type: object
+      additionalProperties: { type: string }
+      description: "Fallback overlay values; envelope values always override."
+    input_path:
+      type: string
+      required: true
+      description: "Dot-path into envelope picking the user content. `v` = the whole v field; `v.markdown` = nested."
+    output:
+      type: string
+      enum: ["text", "json"]
+      required: true
+      description: "text: wrap response in `{response: \"...\"}` (preserves other v fields); json: parse response as JSON, replace v."
+    retry:
+      type: object
+      additionalProperties: false
+      properties:
+        max_retries: { type: integer, minimum: 0 }
+        delays_ms:   { type: array, items: { type: integer, minimum: 0 } }
+    cache_dir:
+      type: string
+      description: "Optional override for LLM response cache directory. If unset, falls back to the existing default ($DPE_STORAGE/llm/). Token substitution applies ($storage, $temp, $configs, env vars). Set to e.g. `$storage/batch_${BATCH}/llm` to keep cache entries inside a per-batch storage subtree so they get wiped atomically with the batch. Trade-off: cross-batch cache misses — same content in two batches re-pays the LLM cost."
+
+input:
+  description: "Any envelope. The user content is read from `settings.input_path`."
+
+output:
+  description: "Same envelope with response merged into v (text mode) or v replaced by the parsed JSON (json mode)."
+
+# API keys are read from environment, NOT settings:
+#   ANTHROPIC_API_KEY               (provider=anthropic)
+#   GEMINI_API_KEY or GOOGLE_API_KEY (provider=google)

@@ -1,0 +1,29 @@
+[package]
+name        = "combycode-dpe-tool-validate"
+version     = "0.1.0"
+edition     = "2021"
+description = "DPE tool: JSON Schema validator (mark or filter mode)."
+license     = "AGPL-3.0-or-later"
+repository  = "https://github.com/combycode/dpe-tools"
+homepage    = "https://github.com/combycode/dpe-tools"
+readme      = "README.md"
+
+[[bin]]
+name = "validate"
+path = "src/main.rs"
+
+[dependencies]
+combycode-dpe = "2"
+jsonschema    = { version = "0.61", default-features = false }
+serde         = { version = "1", features = ["derive"] }
+# preserve_order: emitted JSON keeps input key order (was implied by bson 2 until bson 3).
+serde_json    = { version = "1", features = ["preserve_order"] }
+# YAML — serde-saphyr in strict YAML 1.2 mode (workspace policy). Used
+# to load schema files that authors wrote in YAML rather than JSON.
+serde-saphyr  = "2.2"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

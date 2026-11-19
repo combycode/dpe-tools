@@ -1,0 +1,23 @@
+{
+  "name": "@combycode/dpe-tool-filter",
+  "version": "0.1.0",
+  "description": "DPE tool: filter / map / transform NDJSON stream via JS expressions.",
+  "license": "AGPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/combycode/dpe-tools"
+  },
+  "type": "module",
+  "main": "src/main.ts",
+  "dependencies": {
+    "@combycode/dpe-framework-ts": "^2.0.4"
+  },
+  "devDependencies": {
+    "@types/bun": "^1.4.4",
+    "@types/node": "^24.19.2",
+    "typescript": "^7.0.2"
+  },
+  "scripts": {
+    "test": "bun test"
+  }
+}

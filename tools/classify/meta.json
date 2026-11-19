@@ -1,0 +1,11 @@
+{
+  "name": "classify",
+  "version": "0.1.0",
+  "description": "Universal rule-based classifier. Applies ordered JS-expression rules against configurable dictionaries to attach {className, confidence, reason, data} to each envelope.",
+  "runtime": "bun",
+  "entry": "src/main.ts",
+  "spec":  "spec.yaml",
+  "run":   "bun src/main.ts",
+  "build": "bun install",
+  "test":  "bun test"
+}

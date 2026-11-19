@@ -1,0 +1,304 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Tag to (re-)release, e.g. v0.1.0"
+        required: true
+
+env:
+  RUST_VERSION: "1.100"
+  BUN_VERSION:  "1.2.20"
+  CARGO_TERM_COLOR: always
+
+# tarball naming: <tool>-<os>-<arch>.tar.gz, where (os, arch) is one of:
+#   linux-x64, linux-arm64, darwin-x64, darwin-arm64, windows-x64.
+# The catalog's url_template substitutes {name}/{os}/{arch}/{version} so
+# this naming MUST stay aligned with scripts/build-catalog.sh's PLATFORMS.
+
+jobs:
+  # ─── Per-platform Rust build ───────────────────────────────────────────
+  build-rust:
+    name: build-rust (${{ matrix.platform }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: linux-x64
+            runner:   ubuntu-latest
+            target:   x86_64-unknown-linux-gnu
+          - platform: linux-arm64
+            runner:   ubuntu-latest
+            target:   aarch64-unknown-linux-gnu
+          - platform: darwin-x64
+            runner:   macos-latest
+            target:   x86_64-apple-darwin
+          - platform: darwin-arm64
+            runner:   macos-latest
+            target:   aarch64-apple-darwin
+          - platform: windows-x64
+            runner:   windows-latest
+            target:   x86_64-pc-windows-msvc
+
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          targets:   ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Install cross compiler (linux-arm64 only)
+        if: matrix.platform == 'linux-arm64'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
+          mkdir -p .cargo
+          {
+            echo '[target.aarch64-unknown-linux-gnu]'
+            echo 'linker = "aarch64-linux-gnu-gcc"'
+          } >> .cargo/config.toml
+
+      - name: Fetch pdfium (doc-converter)
+        shell: bash
+        run: |
+          case "${{ matrix.platform }}" in
+              darwin-x64)   plat=mac-x64 ;;
+              darwin-arm64) plat=mac-arm64 ;;
+              windows-x64)  plat=win-x64 ;;
+              *)            plat="${{ matrix.platform }}" ;;
+          esac
+          bash tools/doc-converter/scripts/fetch-pdfium.sh "$plat"
+
+      - name: cargo build --release --target ${{ matrix.target }}
+        run: cargo build --workspace --release --target ${{ matrix.target }}
+
+      # Per-tool tarballs. Deterministic flags so catalog sha256s reproduce
+      # bit-for-bit:
+      #   --sort=name        — stable file order
+      #   --mtime='@1700000000' — fixed epoch (arbitrary anchor)
+      #   --owner=0 --group=0 --numeric-owner — strip uid/gid metadata
+      #   --use-compress-program='gzip -n' — disable gzip's own timestamp
+      - name: Build tarballs (Linux/macOS)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          mkdir -p stage
+          TARDET=(--sort=name --mtime='@1700000000'
+                  --owner=0 --group=0 --numeric-owner
+                  --use-compress-program='gzip -n')
+          for tool_dir in tools/*/; do
+              tool=$(basename "$tool_dir")
+              [ -f "$tool_dir/Cargo.toml" ] || continue   # skip TS tools here
+              src_bin="target/${{ matrix.target }}/release/$tool"
+              [ -f "$src_bin" ] || { echo "missing binary: $src_bin"; exit 1; }
+              # stage: <tool>/<binary> + meta.json + spec.yaml + README.md
+              workdir="$(mktemp -d)"
+              mkdir -p "$workdir/$tool"
+              cp "$src_bin" "$workdir/$tool/$tool"
+              chmod +x "$workdir/$tool/$tool"
+              # Native libraries build.rs staged next to the binary (doc-converter: pdfium).
+              if [ "$tool" = doc-converter ]; then
+                  lib=""
+                  for l in pdfium.dll libpdfium.so libpdfium.dylib; do
+                      [ -f "target/${{ matrix.target }}/release/$l" ] && lib=$l
+                  done
+                  [ -n "$lib" ] || { echo "doc-converter: no pdfium staged in target/${{ matrix.target }}/release"; exit 1; }
+                  size=$(wc -c < "target/${{ matrix.target }}/release/$lib")
+                  [ "$size" -gt 1000000 ] || { echo "doc-converter: $lib is only $size bytes - not a real library"; exit 1; }
+                  cp "target/${{ matrix.target }}/release/$lib" "$workdir/$tool/$lib"
+              fi
+              cp "$tool_dir/meta.json"  "$workdir/$tool/meta.json"
+              cp "$tool_dir/spec.yaml"  "$workdir/$tool/spec.yaml"
+              cp "$tool_dir/README.md"  "$workdir/$tool/README.md"
+              tar "${TARDET[@]}" -cf "stage/${tool}-${{ matrix.platform }}.tar.gz" \
+                  -C "$workdir" "$tool"
+          done
+
+      - name: Build tarballs (Windows)
+        if: runner.os == 'Windows'
+        shell: bash
+        run: |
+          mkdir -p stage
+          # Windows has no native deterministic-tar story; we still pass
+          # the same flags via Git Bash tar (msys provides them).
+          TARDET=(--sort=name --mtime='@1700000000'
+                  --owner=0 --group=0 --numeric-owner
+                  --use-compress-program='gzip -n')
+          for tool_dir in tools/*/; do
+              tool=$(basename "$tool_dir")
+              [ -f "$tool_dir/Cargo.toml" ] || continue
+              src_bin="target/${{ matrix.target }}/release/${tool}.exe"
+              [ -f "$src_bin" ] || { echo "missing binary: $src_bin"; exit 1; }
+              workdir="$(mktemp -d)"
+              mkdir -p "$workdir/$tool"
+              cp "$src_bin" "$workdir/$tool/${tool}.exe"
+              # Native libraries build.rs staged next to the binary (doc-converter: pdfium).
+              if [ "$tool" = doc-converter ]; then
+                  lib=""
+                  for l in pdfium.dll libpdfium.so libpdfium.dylib; do
+                      [ -f "target/${{ matrix.target }}/release/$l" ] && lib=$l
+                  done
+                  [ -n "$lib" ] || { echo "doc-converter: no pdfium staged in target/${{ matrix.target }}/release"; exit 1; }
+                  size=$(wc -c < "target/${{ matrix.target }}/release/$lib")
+                  [ "$size" -gt 1000000 ] || { echo "doc-converter: $lib is only $size bytes - not a real library"; exit 1; }
+                  cp "target/${{ matrix.target }}/release/$lib" "$workdir/$tool/$lib"
+              fi
+              cp "$tool_dir/meta.json"  "$workdir/$tool/meta.json"
+              cp "$tool_dir/spec.yaml"  "$workdir/$tool/spec.yaml"
+              cp "$tool_dir/README.md"  "$workdir/$tool/README.md"
+              tar "${TARDET[@]}" -cf "stage/${tool}-${{ matrix.platform }}.tar.gz" \
+                  -C "$workdir" "$tool"
+          done
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: rust-${{ matrix.platform }}
+          path: stage/*
+
+  # ─── TS tool tarballs (one tarball per TS tool, platform-independent) ──
+  build-ts:
+    name: build-ts
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Build per-tool TS bundles
+        shell: bash
+        run: |
+          mkdir -p stage
+          TARDET=(--sort=name --mtime='@1700000000'
+                  --owner=0 --group=0 --numeric-owner
+                  --use-compress-program='gzip -n')
+          for tool_dir in tools/*/; do
+              tool=$(basename "$tool_dir")
+              [ -f "$tool_dir/package.json" ] || continue
+              ( cd "$tool_dir"
+                bun install --frozen-lockfile
+                # Bundle main.ts to dist/<tool>.js (or src as-is if no build script).
+                if jq -e '.scripts.build' package.json >/dev/null 2>&1; then
+                    bun run build
+                fi
+              )
+              workdir="$(mktemp -d)"
+              mkdir -p "$workdir/$tool"
+              # We ship src/, package.json, meta.json, spec.yaml, README.md.
+              # Bun runtime resolves at install time on the user's box.
+              cp -r "$tool_dir/src"          "$workdir/$tool/src"
+              cp    "$tool_dir/package.json" "$workdir/$tool/package.json"
+              cp    "$tool_dir/meta.json"    "$workdir/$tool/meta.json"
+              cp    "$tool_dir/spec.yaml"    "$workdir/$tool/spec.yaml"
+              cp    "$tool_dir/README.md"    "$workdir/$tool/README.md"
+              # TS tools are platform-independent; we still emit per-platform
+              # tarball names so the runner's url_template substitution works
+              # uniformly. Build one tarball, then symlink-copy for each plat.
+              tar "${TARDET[@]}" -cf "stage/${tool}-any.tar.gz" \
+                  -C "$workdir" "$tool"
+              for plat in linux-x64 linux-arm64 darwin-x64 darwin-arm64 windows-x64; do
+                  cp "stage/${tool}-any.tar.gz" "stage/${tool}-${plat}.tar.gz"
+              done
+              rm -f "stage/${tool}-any.tar.gz"
+          done
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: ts-bundles
+          path: stage/*
+
+  # ─── Build catalog.json + finalize GH Release ──────────────────────────
+  release:
+    name: release
+    needs: [build-rust, build-ts]
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Determine tag/version
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+              tag="${{ github.event.inputs.tag }}"
+          else
+              tag="${{ github.ref_name }}"
+          fi
+          [[ "$tag" =~ ^v(.+)$ ]] || { echo "tag $tag must start with v"; exit 1; }
+          version="${BASH_REMATCH[1]}"
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: artifacts
+
+      # CRITICAL: actions/upload-artifact ZIPs internally and STRIPS unix
+      # exec bits. Re-apply chmod after download-artifact in EVERY consumer.
+      - name: Stage tarballs + chmod
+        shell: bash
+        run: |
+          mkdir -p tarballs
+          find artifacts -type f -name '*.tar.gz' -exec cp {} tarballs/ \;
+          chmod 0644 tarballs/*.tar.gz
+
+      - name: Generate catalog.json
+        shell: bash
+        run: |
+          chmod +x scripts/build-catalog.sh
+          scripts/build-catalog.sh \
+            --tarball-dir tarballs \
+            --version "${{ steps.ver.outputs.version }}" \
+            --output  catalog.json
+          echo "--- catalog.json ---"
+          cat catalog.json
+
+      - name: Stage release files
+        shell: bash
+        run: |
+          mkdir -p release-staged
+          cp tarballs/*.tar.gz   release-staged/
+          cp catalog.json        release-staged/
+
+      # Orphan draft releases accumulate when finalize fails on a prior run.
+      # softprops/action-gh-release v3 cannot finalize when one exists for
+      # the same tag. `gh release delete <tag>` can't disambiguate multiple
+      # drafts; use the raw REST API which exposes numeric id.
+      # NOTE: do NOT use `gh release list --json databaseId` - that field
+      # is invalid for releases (only for issues/PRs). Use `gh api` directly.
+      - name: Clean up orphan draft releases for this tag
+        env:
+          TAG: ${{ steps.ver.outputs.tag }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
+        run: |
+          gh api "/repos/$GITHUB_REPOSITORY/releases" --paginate \
+              --jq ".[] | select(.tag_name == \"$TAG\" and .draft == true) | .id" \
+            | while read -r id; do
+                [ -n "$id" ] || continue
+                echo "deleting orphan draft release id=$id"
+                gh api -X DELETE "/repos/$GITHUB_REPOSITORY/releases/$id" || true
+              done
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v3
+        with:
+          tag_name:   ${{ steps.ver.outputs.tag }}
+          files:      release-staged/*
+          prerelease: ${{ contains(steps.ver.outputs.tag, '-') }}
+          generate_release_notes: true

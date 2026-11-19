@@ -1,0 +1,26 @@
+[package]
+name        = "combycode-dpe-tool-read-tables"
+version     = "0.1.0"
+edition     = "2021"
+description = "DPE tool: reads tables from sheet data; finds table rectangles via format templates, extracts data rows."
+license     = "AGPL-3.0-or-later"
+repository  = "https://github.com/combycode/dpe-tools"
+homepage    = "https://github.com/combycode/dpe-tools"
+readme      = "README.md"
+
+[[bin]]
+name = "read-tables"
+path = "src/main.rs"
+
+[dependencies]
+combycode-dpe = "2"
+serde         = { version = "1", features = ["derive"] }
+# preserve_order: emitted JSON keeps input key order (was implied by bson 2 until bson 3).
+serde_json    = { version = "1", features = ["preserve_order"] }
+regex         = "1"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

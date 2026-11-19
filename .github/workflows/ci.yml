@@ -1,0 +1,102 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+env:
+  RUST_VERSION: "1.100"
+  BUN_VERSION:  "1.2.20"
+  CARGO_TERM_COLOR: always
+
+jobs:
+  # ─── Lint everything (one job, ubuntu) ─────────────────────────────────
+  lint:
+    name: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+          components: clippy, rustfmt
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: Install per-tool TS deps
+        run: |
+          for d in tools/*/package.json; do
+              ( cd "$(dirname "$d")" && bun install --frozen-lockfile )
+          done
+
+      # Pre-install actionlint + shellcheck so scripts/lint.sh doesn't need
+      # to download in CI. shellcheck must be on PATH BEFORE actionlint runs;
+      # otherwise actionlint silently skips shell-script linting and warnings
+      # hide.
+      - name: Install shellcheck (apt)
+        run: sudo apt-get install -y --no-install-recommends shellcheck
+
+      - name: Install actionlint
+        run: |
+          mkdir -p scripts/.bin
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.12/scripts/download-actionlint.bash) \
+            1.7.12 scripts/.bin
+
+      - name: Run lint suite
+        run: bash scripts/lint.sh
+
+  # ─── cargo test on every OS ────────────────────────────────────────────
+  test-rust:
+    name: test-rust (${{ matrix.os }})
+    needs: lint
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: ${{ env.RUST_VERSION }}
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Fetch pdfium (doc-converter)
+        shell: bash
+        run: bash tools/doc-converter/scripts/fetch-pdfium.sh
+      - name: cargo test --workspace
+        run: cargo test --workspace --all-features
+
+  # ─── bun test (linux, all TS tools) ────────────────────────────────────
+  test-ts:
+    name: test-ts
+    needs: lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: ${{ env.BUN_VERSION }}
+
+      - name: bun test (each TS tool)
+        run: |
+          for d in tools/*/package.json; do
+              ( cd "$(dirname "$d")"
+                bun install --frozen-lockfile
+                bun test
+              )
+          done

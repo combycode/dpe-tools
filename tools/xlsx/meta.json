@@ -1,0 +1,11 @@
+{
+  "name": "xlsx",
+  "version": "0.1.0",
+  "description": "XLSX parser; extracts sheets, tables, and rows as an NDJSON stream.",
+  "runtime": "rust",
+  "entry": "target/release/xlsx",
+  "spec": "spec.yaml",
+  "run":   "cargo run --release --",
+  "build": "cargo build --release",
+  "test":  "cargo test"
+}

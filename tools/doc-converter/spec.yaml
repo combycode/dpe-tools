@@ -1,0 +1,232 @@
+name: "doc-converter"
+runtime: "rust"
+description: "Convert PDF / DOCX / image documents to text (or any text format) via LLM vision, page-by-page with prompt layering. Per envelope: render each page to JPEG, call the configured provider with the rendered page inline, collect markdown. Frontmatter merged across pages."
+
+settings:
+  type: object
+  additionalProperties: false
+  properties:
+    provider:
+      type: string
+      enum: ["anthropic", "google"]
+      required: true
+    model:
+      type: string
+      required: true
+      description: "Provider model name (e.g. `claude-sonnet-4-6`, `gemini-2.5-pro`)."
+    temperature:
+      type: number
+      minimum: 0
+      maximum: 2
+      default: 0.0
+    max_tokens:
+      type: integer
+      minimum: 1
+      default: 64000
+    thinking_budget:
+      type: integer
+      minimum: 0
+      description: "Optional reasoning budget (Anthropic extended thinking)."
+    prompts:
+      type: object
+      required: true
+      additionalProperties: false
+      properties:
+        dir:     { type: string, required: true, description: "Directory containing prompt files." }
+        name:    { type: string, required: true, description: "Prompt base name." }
+        version: { type: string, required: true, description: "Version tag (e.g. `v1`)." }
+    category:
+      type: string
+      description: "Pipeline-level value for the `category` overlay (only applies when `\"category\"` appears in `overlays`). Wins over envelope and `overlay_defaults`."
+    overlays:
+      type: array
+      items: { type: string }
+      description: "Ordered list of overlay tag names. For each name, the per-envelope value is resolved from (1) `settings.category` if name is `category`, (2) `envelope.v[name]`, (3) `overlay_defaults[name]`."
+    overlay_defaults:
+      type: object
+      additionalProperties: { type: string }
+      description: "Fallback values per overlay name when the envelope doesn't carry them. Envelope values override these."
+    page_filter:
+      type: array
+      items: { type: string }
+      description: "Page-range expressions, e.g. [\"1-5\", \"10\", \"20-\"]. Empty = all pages."
+    render:
+      type: object
+      additionalProperties: false
+      properties:
+        dpi:     { type: integer, default: 150, minimum: 72,  maximum: 600 }
+        quality: { type: integer, default: 85,  minimum: 1,   maximum: 100 }
+    output:
+      type: object
+      required: true
+      additionalProperties: false
+      description: "Output destination. Exactly one of `file` / `field` required (validated at startup)."
+      properties:
+        file:
+          type: object
+          additionalProperties: false
+          description: "Mode A — write merged markdown to disk; the file IS the persistent cache. Mutually exclusive with `output.field`."
+          properties:
+            dir:           { type: string, required: true, description: "Output directory. Runner path-prefixes (`$temp`, `$session`, etc.) resolved at spawn." }
+            name:          { type: string, required: true, description: "Filename source. Shorthand `v.<field>` (e.g. `v.hash`) reads the named envelope field, OR a template like `{hash:short:8}-{filename:safe}.md`. Available filters: safe, short[:N], nodot, lower, upper." }
+            target_ext:    { type: string, default: ".md", description: "Extension appended when `name`'s last segment has no dot; ignored when `name` already includes an extension." }
+            invalidation:
+              type: string
+              enum: ["strict", "sidecar", "none"]
+              default: "strict"
+              description: "Cache-hit policy. `strict`: file exists → HIT, no validation. `sidecar`: validate via `<file>.dpe.json`. `none`: always regenerate."
+        field:
+          type: object
+          additionalProperties: false
+          description: "Mode B — emit merged markdown on an envelope key. Framework cache at `$DPE_STORAGE/doc-converter/<hash>.json` persists results. Mutually exclusive with `output.file`."
+          properties:
+            name: { type: string, required: true, description: "Top-level envelope key (no dots) that carries the full markdown body." }
+        extract_frontmatter:
+          type: boolean
+          default: true
+          description: "When true, parse the leading `---` block and promote each key as a separate `v.<key>` envelope field. The body itself ALWAYS retains the `---` block regardless of this setting."
+        page_separator:
+          type: string
+          default: "<!-- PAGE: {n} -->"
+          description: "Template injected before every per-page body during merge. `{n}` is substituted with the 1-based page number. Empty string disables the marker. Whole-doc mode never injects this — the LLM emits one continuous response."
+    docx:
+      type: object
+      additionalProperties: false
+      properties:
+        soffice_bin: { type: string, default: "soffice", description: "Path to LibreOffice binary used for DOCX -> PDF conversion." }
+        temp_dir:    { type: string, description: "Override scratch directory for soffice." }
+    parallel:
+      type: object
+      additionalProperties: false
+      description: "Per-page parallel dispatch (when strategy.per_page_mode = parallel). Concurrent in-flight LLM calls are capped at `limit`."
+      properties:
+        limit:
+          type: integer
+          minimum: 1
+          default: 4
+          description: "Max concurrent LLM calls. 1 = serial. Default 4 is safe for typical Anthropic Tier 2 / Gemini quotas; bump only if you've measured your provider's rate-limit headroom."
+    strategy:
+      type: object
+      additionalProperties: false
+      description: "Routing decision: short PDFs go to the LLM as ONE raw-PDF attachment in a single call (whole-doc mode); longer ones split into per-page direct or batch dispatch."
+      properties:
+        whole_doc_threshold:
+          type: integer
+          minimum: 0
+          default: 5
+          description: "Page count under which the document is sent as ONE raw-PDF attachment to the LLM. Set to 0 to always use per-page dispatch."
+        whole_doc_max_pages:
+          type: integer
+          minimum: 1
+          default: 100
+          description: "Hard ceiling on whole-doc mode page count. Anthropic caps at 100, Gemini at 1000; default 100 covers both safely."
+        whole_doc_max_bytes:
+          type: integer
+          minimum: 1
+          default: 20971520
+          description: "Hard ceiling on whole-doc mode source-file size in bytes. Default 20 MiB — the smaller of Anthropic PDF cap (32 MB) and Gemini inline cap (20 MB)."
+        per_page_mode:
+          type: string
+          enum: ["parallel", "batch"]
+          default: "parallel"
+          description: "How to dispatch when whole-doc isn't picked. `parallel` = N direct calls capped at parallel.limit; `batch` = one batch-API request, polled to completion."
+    batch:
+      type: object
+      additionalProperties: false
+      description: "Batch-API dispatch (active only when strategy.per_page_mode = batch). Pages are submitted as one batch request; the tool polls until completion (or, with `poll: null`, fires-and-forgets and harvests on a subsequent run)."
+      properties:
+        state_dir:
+          type: string
+          default: "$storage/doc-converter/batches"
+          description: "Where to persist `{doc_cache_key → batch_id}` so a re-run picks up an in-flight batch instead of submitting again. Atomically written JSON; one file per pending batch."
+        poll:
+          type: ["object", "null"]
+          additionalProperties: false
+          description: "Polling cadence. `null` = fire-and-forget: submit, emit one meta envelope, return without a data envelope; harvest on a future run."
+          properties:
+            start_after_ms:
+              type: integer
+              minimum: 0
+              default: 30000
+              description: "Wait this long after submission before the FIRST status poll."
+            interval_ms:
+              type: integer
+              minimum: 1000
+              default: 10000
+              description: "Between subsequent polls. Provider rate-limits status checks."
+            deadline_ms:
+              type: integer
+              minimum: 1000
+              default: 600000
+              description: "End-to-end wall-clock deadline. Stops polling, emits a `warn` log, leaves the state file. Next run resumes."
+        request_timeout_ms:
+          type: integer
+          minimum: 1000
+          default: 120000
+          description: "Per-HTTP-request timeout (submission, status check, result fetch). Orthogonal to poll.deadline_ms (which is end-to-end)."
+
+    request_timeout_ms:
+      type: integer
+      minimum: 1000
+      default: 180000
+      description: "Per-HTTP-request timeout (ms) applied uniformly to whole-doc dispatch, per-page parallel, and batch internals. If the provider stalls past this, reqwest aborts the call with a timeout error and the retry wrapper treats it as a transient retryable failure (when `Timeout` is in `retry.retry_on`)."
+
+    retry:
+      type: object
+      additionalProperties: false
+      description: "Retry policy for transient HTTP failures. Applied uniformly to every provider call."
+      properties:
+        max_attempts:
+          type: integer
+          minimum: 1
+          default: 3
+          description: "Total attempts including the first. `1` disables retry; `3` = 1 initial + up to 2 retries."
+        initial_backoff_ms:
+          type: integer
+          minimum: 0
+          default: 1000
+          description: "Backoff before the FIRST retry. Doubles each subsequent retry, capped at `max_backoff_ms`."
+        max_backoff_ms:
+          type: integer
+          minimum: 0
+          default: 30000
+          description: "Cap on per-retry wait."
+        retry_on:
+          type: array
+          items:
+            type: string
+            enum: ["rate_limit", "server_error", "timeout", "connection_error"]
+          default: ["rate_limit", "server_error", "timeout", "connection_error"]
+          description: "Which error classes are retryable. `rate_limit`=HTTP 429; `server_error`=HTTP 5xx; `timeout`=request_timeout_ms exceeded; `connection_error`=TCP reset / DNS / TLS. Other failures (4xx other than 429, parse errors, validation refusals) are NEVER retried."
+
+input:
+  description: "Per envelope:"
+  properties:
+    path: { type: string, required: true, description: "Path to a .pdf, .docx, or image file." }
+
+output:
+  description: |
+    Per envelope, on success:
+      data envelope: {
+        path:         <output-file>,
+        cache_hit:    <bool>,
+        ...merged_frontmatter_fields,
+      }
+    In Mode A (output.file) `path` is also the cache entry: delete it to
+    force a fresh conversion. Mode B (output.field) carries the body on the
+    configured key; its `path` is the untouched INPUT path (never delete it
+    to invalidate - use DPE_CACHE_MODE=refresh).
+
+    When batch mode is active (strategy.per_page_mode = batch), additionally
+    emits ONE meta envelope per file (at submission OR resume) with shape:
+      { source: <input-path>, batch_id: <provider-id> }
+    so downstream stages can correlate the input with the provider's batch
+    ID for external tracking. Status / progress (submission, polling,
+    completion) goes via ctx.log to stderr in the framework's standard
+    structured-log format. Terminal failures (provider Failed / Expired,
+    result mapping errors) surface via ctx.error with the original input
+    attached.
+
+# API keys are read from environment, NOT settings:
+#   ANTHROPIC_API_KEY  (provider=anthropic)
+#   GEMINI_API_KEY or GOOGLE_API_KEY  (provider=google)
