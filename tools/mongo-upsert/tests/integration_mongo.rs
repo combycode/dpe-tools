@@ -241,3 +241,20 @@ async fn key_above_i64_max_never_touches_the_minus_one_document() {
     assert_eq!(coll.count_documents(doc! {}).await.unwrap(), 2);
     coll.drop().await.ok();
 }
+
+#[tokio::test]
+async fn inc_above_i64_max_promotes_the_field_to_decimal128() {
+    let Some(client) = try_client().await else { return; };
+    let coll_name = unique_coll_name("u64_inc");
+    let coll = client.database("dpe_test").collection::<Document>(&coll_name);
+    coll.insert_one(doc! {"id": "a", "n": 1_i64}).await.unwrap();
+    let mut key = BTreeMap::new();
+    key.insert("id".into(), "v.id".into());
+    let ops = vec![Operation { op: OperatorKind::Inc, path: "n".into(), value: Some("v.by".into()), literal: None }];
+    let s = settings_for(&coll_name, ops, key);
+    apply_envelope(&coll, &json!({"v": {"id": "a", "by": u64::MAX}}), &s).await;
+    let d = coll.find_one(doc! {"id": "a"}).await.unwrap().unwrap();
+    let want: mongodb::bson::Decimal128 = "18446744073709551616".parse().unwrap();
+    assert_eq!(d.get("n"), Some(&mongodb::bson::Bson::Decimal128(want)));
+    coll.drop().await.ok();
+}
