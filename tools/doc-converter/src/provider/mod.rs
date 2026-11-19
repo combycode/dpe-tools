@@ -30,9 +30,27 @@ use crate::settings::{RetryCfg, RetryTrigger};
 #[derive(Debug, Clone)]
 pub struct ModelCfg {
     pub model: String,
-    pub temperature: f32,
+    /// None: do not send a temperature.
+    pub temperature: Option<f32>,
     pub max_tokens: u32,
     pub thinking_budget: Option<u32>,
+    /// Anthropic `thinking: {type: adaptive}`.
+    pub thinking_adaptive: bool,
+    /// Anthropic `output_config.effort`.
+    pub effort: Option<&'static str>,
+}
+
+impl ModelCfg {
+    pub fn from_settings(s: &crate::settings::Settings) -> Self {
+        ModelCfg {
+            model: s.model.clone(),
+            temperature: s.temperature,
+            max_tokens: s.max_tokens,
+            thinking_budget: s.thinking_budget,
+            thinking_adaptive: s.thinking == Some(crate::settings::ThinkingMode::Adaptive),
+            effort: s.effort.map(|e| e.as_str()),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

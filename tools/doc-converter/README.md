@@ -188,6 +188,8 @@ model:           string                         # required, e.g. "claude-sonnet-
 temperature:     0.0                            # provider-dependent; see notes below
 max_tokens:      65536
 thinking_budget: null                           # int, provider-specific reasoning tokens
+thinking:        null                           # "adaptive" (Anthropic)
+effort:          null                           # low|medium|high|xhigh|max (Anthropic)
 
 prompts:
   dir:     "./prompts"                          # required
@@ -263,9 +265,11 @@ retry:
 |---|---|---|---|
 | `provider` | enum | — | `anthropic` or `google`. Selects the API client; the key is read from env. |
 | `model` | string | — | Provider-specific model identifier. |
-| `temperature` | float | `0.0` | LLM sampling temperature. Provider-dependent range — see [Temperature ranges per provider](#temperature-ranges-per-provider) below. |
+| `temperature` | float | `0.0` | LLM sampling temperature. Provider-dependent range — see [Temperature ranges per provider](#temperature-ranges-per-provider) below. `null`: not sent (current Claude models reject it; see [Current Claude models](#current-claude-models-temperature-thinking-effort)). |
 | `max_tokens` | int | `65536` | Max response tokens (provider-clamped if higher than the model allows). |
 | `thinking_budget` | int? | `null` | Reasoning-token budget for providers that support extended thinking. **Anthropic constraint:** if set on Anthropic, `temperature` must be exactly `1.0` (the API rejects other values when thinking is enabled). |
+| `thinking` | `"adaptive"`? | — | Anthropic only. Adaptive thinking for models that reject `thinking_budget`; mutually exclusive with it. |
+| `effort` | enum? | — | Anthropic only. `low` \| `medium` \| `high` \| `xhigh` \| `max` (`output_config.effort`). |
 | `prompts.dir` | string | — | Directory holding the prompt files. Absolute or relative to runner cwd. |
 | `prompts.name` | string | — | Base prompt name. The base file is `<name>_<version>.txt`. |
 | `prompts.version` | string | — | Version tag, used in every filename. |
@@ -307,8 +311,26 @@ retry:
 
 | Provider | Documented range | Notes |
 |---|---|---|
-| `anthropic` | `0.0` to `1.0` (inclusive) | Hard limit per [Messages API docs](https://docs.anthropic.com/en/api/messages). Values outside the range are rejected. |
+| `anthropic` | `0.0` to `1.0` (inclusive) | Hard limit per [Messages API docs](https://docs.anthropic.com/en/api/messages). Values outside the range are rejected. Current Claude models accept no temperature at all — see below. |
 | `google` | not explicitly documented | Default `1.0`. Gemini 3 docs recommend keeping the default; values below `1.0` "may lead to unexpected behavior, such as looping or degraded performance, particularly in complex mathematical or reasoning tasks." |
+
+### Current Claude models: `temperature`, `thinking`, `effort`
+
+Current Claude models (Opus 4.7 and later, Sonnet 5 and later, Haiku 5.5, Fable) accept no sampling parameters and reject a `thinking_budget`:
+
+- **`temperature`** — when the API answers a request with a 400 about `temperature`, the tool sends the request again without it and leaves it out for that model for the rest of the run (one `warn` log line). Set `temperature: null` to never send it. Older models keep receiving the configured value (default `0.0`), as before. In batch mode the rejection arrives per page in the results, with a hint to set `temperature: null`.
+- **`thinking: adaptive`** — sends `thinking: {type: "adaptive"}`: the model decides how much to reason. Use it instead of `thinking_budget` on models that reject budgets; the two are mutually exclusive. No temperature is sent with it.
+- **`effort`** — `low` | `medium` | `high` | `xhigh` | `max`, sent as `output_config.effort`: how much the model reasons and writes. Leave it unset to use the model's default.
+
+`thinking` and `effort` are Anthropic-only; setting them with `provider: google` is a startup error.
+
+```yaml
+provider: anthropic
+model:    claude-haiku-5-5
+temperature: null        # optional: skips the first rejected request
+thinking: adaptive
+effort:   low
+```
 
 **Practical advice:** for structural document extraction the model should be as deterministic as possible, so `0.0` (Anthropic) or default `1.0` (Gemini) is what you want. Don't push temperature high for this tool — you'll get hallucinated frontmatter values.
 

@@ -7,6 +7,8 @@ const BASE_CFG: ModelCfg = {
     temperature: 0,
     max_tokens: 1000,
     thinking_budget: null,
+    thinking_adaptive: false,
+    effort: null,
 };
 
 // ─── URL + body shape ────────────────────────────────────────────────

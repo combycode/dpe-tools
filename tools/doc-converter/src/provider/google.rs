@@ -88,10 +88,10 @@ impl GoogleProvider {
 
     pub fn build_body(&self, system: &str, user: &UserContent, cfg: &ModelCfg) -> Value {
         let parts = build_parts(user);
-        let mut gen_cfg = json!({
-            "temperature": cfg.temperature,
-            "maxOutputTokens": cfg.max_tokens,
-        });
+        let mut gen_cfg = json!({ "maxOutputTokens": cfg.max_tokens });
+        if let Some(t) = cfg.temperature {
+            gen_cfg["temperature"] = json!(t);
+        }
         if cfg.thinking_budget.unwrap_or(0) > 0 {
             gen_cfg["thinkingConfig"] = json!({ "thinkingBudget": cfg.thinking_budget });
         }
@@ -393,9 +393,11 @@ mod tests {
     fn cfg() -> ModelCfg {
         ModelCfg {
             model: "gemini-3-flash-preview".into(),
-            temperature: 0.0,
+            temperature: Some(0.0),
             max_tokens: 1000,
             thinking_budget: None,
+            thinking_adaptive: false,
+            effort: None,
         }
     }
 

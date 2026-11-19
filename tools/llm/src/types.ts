@@ -38,12 +38,19 @@ export interface RetryCfg {
  */
 export type OnFailureMode = "stderr" | "envelope" | "both";
 
+export type Effort = "low" | "medium" | "high" | "xhigh" | "max";
+
 export interface Settings {
     provider: Provider;
     model: string;
-    temperature?: number;
+    /** Absent: 0. `null`: not sent at all (models that reject it). */
+    temperature?: number | null;
     max_tokens?: number;
     thinking_budget?: number | null;
+    /** Anthropic only: `adaptive` sends `thinking: {type: "adaptive"}`. Excludes `thinking_budget`. */
+    thinking?: "adaptive";
+    /** Anthropic only: `output_config.effort`. */
+    effort?: Effort;
 
     prompts: PromptsCfg;
 
@@ -99,9 +106,14 @@ export interface Settings {
 /** One fully-resolved LLM call config passed to a Provider. */
 export interface ModelCfg {
     model: string;
-    temperature: number;
+    /** null: do not send a temperature. */
+    temperature: number | null;
     max_tokens: number;
     thinking_budget: number | null;
+    /** Anthropic `thinking: {type: "adaptive"}`. */
+    thinking_adaptive: boolean;
+    /** Anthropic `output_config.effort`. */
+    effort: Effort | null;
 }
 
 /** Interface every provider impl satisfies. */

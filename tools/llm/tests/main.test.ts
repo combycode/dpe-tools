@@ -14,7 +14,15 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 
 import type { ProviderClient, Settings } from "../src/types";
-import { processEnvelope, stripFences, buildSystemPrompt, providerCacheKey, CACHE_NAMESPACE } from "../src/main";
+import {
+    processEnvelope,
+    stripFences,
+    buildSystemPrompt,
+    providerCacheKey,
+    CACHE_NAMESPACE,
+    validateModelSettings,
+    modelCfg,
+} from "../src/main";
 
 class MockProvider implements ProviderClient {
     public calls: { system: string; user: string; cfg: any }[] = [];
@@ -348,6 +356,8 @@ test("settings.thinking_budget propagates into model cfg", async () => {
         temperature: 0,
         max_tokens: 5000,
         thinking_budget: 2000,
+        thinking_adaptive: false,
+        effort: null,
     });
 });
 
@@ -375,6 +385,27 @@ describe("providerCacheKey", () => {
         for (let i = 0; i < s.length; i++) acc = (acc * 31 + s.charCodeAt(i)) >>> 0;
         return `H:${s.length}:${acc.toString(16)}`;
     };
+
+    test("unchanged for settings that predate thinking/effort", () => {
+        const k = providerCacheKey("sys", "user", baseSettings, h) as Record<string, unknown>;
+        expect(Object.keys(k).sort()).toEqual([
+            "max_tokens",
+            "model",
+            "provider",
+            "system_hash",
+            "temperature",
+            "thinking_budget",
+            "user_hash",
+        ]);
+        expect(k.temperature).toBe(0);
+    });
+
+    test("diverges on thinking, effort and temperature null", () => {
+        const k0 = providerCacheKey("sys", "user", baseSettings, h);
+        for (const extra of [{ thinking: "adaptive" as const }, { effort: "low" as const }, { temperature: null }]) {
+            expect(providerCacheKey("sys", "user", { ...baseSettings, ...extra }, h)).not.toEqual(k0);
+        }
+    });
 
     test("stable for identical inputs", () => {
         const a = providerCacheKey("sys", "user", baseSettings, h);
@@ -678,5 +709,39 @@ describe("main() bootstrap", () => {
         // The top-level invocation must also handle rejection so
         // unhandled errors don't vanish silently.
         expect(code).toMatch(/main\(\)\s*\.catch\s*\(/);
+    });
+});
+
+// ─── model settings: temperature null, thinking adaptive, effort ─────
+
+describe("model settings", () => {
+    const base: Settings = {
+        provider: "anthropic",
+        model: "m",
+        prompts: { dir: "/p", name: "n", version: "v1" },
+        input_path: "v.text",
+        output: "text",
+    };
+
+    test("temperature: absent -> 0, null -> null", () => {
+        expect(modelCfg(base).temperature).toBe(0);
+        expect(modelCfg({ ...base, temperature: null }).temperature).toBeNull();
+        expect(modelCfg({ ...base, temperature: 0.3 }).temperature).toBe(0.3);
+    });
+
+    test("thinking adaptive + effort map to the model config", () => {
+        const c = modelCfg({ ...base, thinking: "adaptive", effort: "xhigh" });
+        expect(c.thinking_adaptive).toBe(true);
+        expect(c.effort).toBe("xhigh");
+    });
+
+    test("validation", () => {
+        expect(() => validateModelSettings({ ...base, thinking: "adaptive", effort: "low" })).not.toThrow();
+        expect(() => validateModelSettings({ ...base, thinking: "adaptive", thinking_budget: 2000 })).toThrow(
+            "mutually exclusive",
+        );
+        expect(() => validateModelSettings({ ...base, effort: "extreme" as any })).toThrow("effort must be one of");
+        expect(() => validateModelSettings({ ...base, thinking: "on" as any })).toThrow('must be "adaptive"');
+        expect(() => validateModelSettings({ ...base, provider: "google", effort: "low" })).toThrow("Anthropic-only");
     });
 });

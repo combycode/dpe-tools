@@ -43,10 +43,8 @@ export class GoogleProvider implements ProviderClient {
     }
 
     buildBody(system: string, userText: string, cfg: ModelCfg): Record<string, any> {
-        const generationConfig: Record<string, any> = {
-            temperature: cfg.temperature,
-            maxOutputTokens: cfg.max_tokens,
-        };
+        const generationConfig: Record<string, any> = { maxOutputTokens: cfg.max_tokens };
+        if (cfg.temperature !== null) generationConfig.temperature = cfg.temperature;
         if (typeof cfg.thinking_budget === "number" && cfg.thinking_budget > 0) {
             generationConfig.thinkingConfig = { thinkingBudget: cfg.thinking_budget };
         }

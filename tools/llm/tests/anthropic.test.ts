@@ -1,5 +1,5 @@
 import { test, expect, describe } from "bun:test";
-import { AnthropicProvider, extractText } from "../src/providers/anthropic";
+import { AnthropicProvider, extractText, isTemperatureRejection } from "../src/providers/anthropic";
 import type { ModelCfg } from "../src/types";
 
 const BASE_CFG: ModelCfg = {
@@ -7,6 +7,8 @@ const BASE_CFG: ModelCfg = {
     temperature: 0,
     max_tokens: 1000,
     thinking_budget: null,
+    thinking_adaptive: false,
+    effort: null,
 };
 
 // ─── buildBody ───────────────────────────────────────────────────────
@@ -170,4 +172,75 @@ test("Anthropic: retries on network error (fetch throws)", async () => {
     const r = await p.messageSingle("s", "u", BASE_CFG);
     expect(r).toBe("recovered");
     expect(calls).toBe(2);
+});
+
+// ─── temperature / thinking / effort ─────────────────────────────────
+
+describe("temperature, adaptive thinking and effort", () => {
+    const noFetch = (async () => new Response()) as any;
+
+    test("temperature null is not sent", () => {
+        const p = new AnthropicProvider({ apiKey: "t", fetch: noFetch });
+        expect(p.buildBody("S", "U", { ...BASE_CFG, model: "m-null", temperature: null })).not.toHaveProperty(
+            "temperature",
+        );
+    });
+
+    test("adaptive thinking + effort, no temperature", () => {
+        const p = new AnthropicProvider({ apiKey: "t", fetch: noFetch });
+        const body = p.buildBody("S", "U", {
+            ...BASE_CFG,
+            model: "m-adaptive",
+            thinking_adaptive: true,
+            effort: "low",
+        });
+        expect(body.thinking).toEqual({ type: "adaptive" });
+        expect(body.output_config).toEqual({ effort: "low" });
+        expect(body).not.toHaveProperty("temperature");
+    });
+
+    test("isTemperatureRejection only for 400 about temperature", () => {
+        expect(isTemperatureRejection(400, '{"error":{"message":"`temperature` is deprecated for this model."}}')).toBe(
+            true,
+        );
+        expect(isTemperatureRejection(400, "max_tokens too large")).toBe(false);
+        expect(isTemperatureRejection(500, "temperature")).toBe(false);
+    });
+
+    test("a 400 about temperature is retried without it, then remembered for the model", async () => {
+        const bodies: any[] = [];
+        const fetchFn = (async (_url: string, init: any) => {
+            const b = JSON.parse(init.body);
+            bodies.push(b);
+            if ("temperature" in b) {
+                return new Response(
+                    JSON.stringify({
+                        type: "error",
+                        error: {
+                            type: "invalid_request_error",
+                            message: "`temperature` is deprecated for this model.",
+                        },
+                    }),
+                    { status: 400 },
+                );
+            }
+            return new Response(JSON.stringify({ content: [{ type: "text", text: "ok" }] }), { status: 200 });
+        }) as any;
+        const p = new AnthropicProvider({ apiKey: "t", fetch: fetchFn, retry: { max_retries: 0 } });
+        const cfg = { ...BASE_CFG, model: "m-rejects-temperature" };
+        expect(await p.messageSingle("S", "U", cfg)).toBe("ok");
+        expect(await p.messageSingle("S", "U", cfg)).toBe("ok");
+        expect(bodies.map((b) => "temperature" in b)).toEqual([true, false, false]);
+    });
+
+    test("other 400s are not retried", async () => {
+        let calls = 0;
+        const fetchFn = (async () => {
+            calls++;
+            return new Response("max_tokens: too large", { status: 400 });
+        }) as any;
+        const p = new AnthropicProvider({ apiKey: "t", fetch: fetchFn, retry: { max_retries: 0 } });
+        await expect(p.messageSingle("S", "U", { ...BASE_CFG, model: "m-other-400" })).rejects.toThrow("400");
+        expect(calls).toBe(1);
+    });
 });

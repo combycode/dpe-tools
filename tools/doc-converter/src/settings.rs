@@ -7,12 +7,20 @@ use serde::Deserialize;
 pub struct Settings {
     pub provider: ProviderKind,
     pub model: String,
+    /// Sampling temperature. Absent: 0.0. `null`: not sent at all (models that reject it).
     #[serde(default = "d_temp")]
-    pub temperature: f32,
+    pub temperature: Option<f32>,
     #[serde(default = "d_max_tokens")]
     pub max_tokens: u32,
     #[serde(default)]
     pub thinking_budget: Option<u32>,
+    /// Anthropic only: `adaptive` sends `thinking: {type: adaptive}` (models that reject
+    /// `budget_tokens`). Mutually exclusive with `thinking_budget`.
+    #[serde(default)]
+    pub thinking: Option<ThinkingMode>,
+    /// Anthropic only: `output_config.effort`.
+    #[serde(default)]
+    pub effort: Option<Effort>,
 
     pub prompts: PromptsCfg,
 
@@ -103,6 +111,34 @@ pub struct Settings {
 #[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum ProviderKind { Anthropic, Google }
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ThinkingMode { Adaptive }
+
+#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum Effort { Low, Medium, High, Xhigh, Max }
+
+impl Effort {
+    pub fn as_str(self) -> &'static str {
+        match self { Effort::Low => "low", Effort::Medium => "medium", Effort::High => "high",
+                     Effort::Xhigh => "xhigh", Effort::Max => "max" }
+    }
+}
+
+impl Settings {
+    /// Cross-field checks for the model settings.
+    pub fn validate_model(&self) -> Result<(), String> {
+        if self.thinking.is_some() && self.thinking_budget.is_some() {
+            return Err("`thinking: adaptive` and `thinking_budget` are mutually exclusive".into());
+        }
+        if self.provider != ProviderKind::Anthropic && (self.thinking.is_some() || self.effort.is_some()) {
+            return Err("`thinking` and `effort` are Anthropic-only settings".into());
+        }
+        Ok(())
+    }
+}
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -377,7 +413,7 @@ impl Default for PollCfg {
     }
 }
 
-fn d_temp() -> f32 { 0.0 }
+fn d_temp() -> Option<f32> { Some(0.0) }
 fn d_max_tokens() -> u32 { 65536 }
 fn d_true() -> bool { true }
 fn d_md() -> String { ".md".to_string() }
@@ -460,7 +496,7 @@ mod tests {
         }"#;
         let settings: Settings = serde_json::from_str(s).unwrap();
         assert_eq!(settings.provider, ProviderKind::Google);
-        assert_eq!(settings.temperature, 0.0);
+        assert_eq!(settings.temperature, Some(0.0));
         assert_eq!(settings.max_tokens, 65536);
         assert_eq!(settings.render.dpi, 150);
         assert_eq!(settings.render.quality, 85);
@@ -708,5 +744,48 @@ mod tests {
         let err = serde_json::from_str::<Settings>(s).unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("unknown field `dir`"), "{}", msg);
+    }
+
+    fn with(extra: &str) -> Result<Settings, String> {
+        let s = format!(r#"{{
+            "provider": "anthropic", "model": "m",
+            "prompts": {{"dir":"/p","name":"convert","version":"v1"}},
+            "output": {{"file":{{"dir":"/o","name":"v.path"}}}}{extra}
+        }}"#);
+        let st: Settings = serde_json::from_str(&s).map_err(|e| e.to_string())?;
+        st.validate_model()?;
+        Ok(st)
+    }
+
+    #[test]
+    fn temperature_absent_zero_null_none() {
+        assert_eq!(with("").unwrap().temperature, Some(0.0));
+        assert_eq!(with(r#", "temperature": null"#).unwrap().temperature, None);
+        assert_eq!(with(r#", "temperature": 0.3"#).unwrap().temperature, Some(0.3));
+    }
+
+    #[test]
+    fn thinking_adaptive_and_effort_parse() {
+        let s = with(r#", "thinking": "adaptive", "effort": "xhigh""#).unwrap();
+        assert_eq!(s.thinking, Some(ThinkingMode::Adaptive));
+        assert_eq!(s.effort.map(|e| e.as_str()), Some("xhigh"));
+        assert!(with(r#", "effort": "extreme""#).is_err());
+    }
+
+    #[test]
+    fn adaptive_with_budget_is_rejected() {
+        let e = with(r#", "thinking": "adaptive", "thinking_budget": 2000"#).unwrap_err();
+        assert!(e.contains("mutually exclusive"), "{e}");
+    }
+
+    #[test]
+    fn thinking_and_effort_are_anthropic_only() {
+        let s = r#"{
+            "provider": "google", "model": "g", "effort": "low",
+            "prompts": {"dir":"/p","name":"convert","version":"v1"},
+            "output": {"file":{"dir":"/o","name":"v.path"}}
+        }"#;
+        let st: Settings = serde_json::from_str(s).unwrap();
+        assert!(st.validate_model().unwrap_err().contains("Anthropic-only"));
     }
 }

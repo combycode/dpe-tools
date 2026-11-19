@@ -11,7 +11,10 @@
  *
  * Body:
  *   { model, max_tokens, system, messages: [{role:"user", content:"..."}],
- *     temperature, thinking? }
+ *     temperature?, thinking?, output_config? }
+ *
+ * Current Claude models reject `temperature`: a 400 about it is retried once
+ * without the field, and the model is remembered for the rest of the process.
  *
  * Response: { content: [{type:"text", text:"..."}], ... }
  */
@@ -24,6 +27,24 @@ export interface AnthropicOpts {
     fetch?: typeof fetch;
     endpoint?: string;
     retry?: RetryCfg;
+}
+
+/** Models that answered with a 400 about `temperature`; requests to them leave it out. */
+const NO_TEMPERATURE = new Set<string>();
+
+/** True for a 400 whose error text is about the temperature parameter. */
+export function isTemperatureRejection(status: number, body: string): boolean {
+    return status === 400 && body.toLowerCase().includes("temperature");
+}
+
+class AnthropicHttpError extends Error {
+    constructor(
+        readonly status: number,
+        readonly body: string,
+        message: string,
+    ) {
+        super(message);
+    }
 }
 
 export class AnthropicProvider implements ProviderClient {
@@ -42,24 +63,46 @@ export class AnthropicProvider implements ProviderClient {
     }
 
     buildBody(system: string, userText: string, cfg: ModelCfg): Record<string, any> {
-        const thinkingOn = typeof cfg.thinking_budget === "number" && cfg.thinking_budget > 0;
-        // Per Anthropic docs, when thinking is enabled, temperature must be 1.
-        const temperature = thinkingOn ? 1 : cfg.temperature;
+        const budgetOn = typeof cfg.thinking_budget === "number" && cfg.thinking_budget > 0;
         const body: Record<string, any> = {
             model: cfg.model,
             max_tokens: cfg.max_tokens,
             system,
             messages: [{ role: "user", content: userText }],
-            temperature,
         };
-        if (thinkingOn) {
-            body.thinking = { type: "enabled", budget_tokens: cfg.thinking_budget };
-        }
+        // Adaptive thinking runs with the model's own sampling; with a thinking budget the
+        // API requires temperature 1. A model known to reject temperature gets none.
+        const temperature = cfg.thinking_adaptive ? null : budgetOn ? 1 : cfg.temperature;
+        if (temperature !== null && !NO_TEMPERATURE.has(cfg.model)) body.temperature = temperature;
+        if (cfg.thinking_adaptive) body.thinking = { type: "adaptive" };
+        else if (budgetOn) body.thinking = { type: "enabled", budget_tokens: cfg.thinking_budget };
+        if (cfg.effort !== null) body.output_config = { effort: cfg.effort };
         return body;
     }
 
     async messageSingle(system: string, userText: string, cfg: ModelCfg): Promise<string> {
         const body = this.buildBody(system, userText, cfg);
+        try {
+            return await this.post(body);
+        } catch (e) {
+            if (
+                !("temperature" in body) ||
+                !(e instanceof AnthropicHttpError) ||
+                !isTemperatureRejection(e.status, e.body)
+            ) {
+                throw e;
+            }
+            if (!NO_TEMPERATURE.has(cfg.model)) {
+                NO_TEMPERATURE.add(cfg.model);
+                process.stderr.write(
+                    `${JSON.stringify({ type: "log", level: "warn", msg: `anthropic: model ${cfg.model} rejects temperature; resending without it (set temperature: null to skip this)` })}\n`,
+                );
+            }
+            return await this.post(this.buildBody(system, userText, cfg));
+        }
+    }
+
+    private async post(body: Record<string, any>): Promise<string> {
         let lastError: unknown = null;
 
         for (let attempt = 0; attempt <= this.maxRetries; attempt++) {
@@ -87,7 +130,11 @@ export class AnthropicProvider implements ProviderClient {
 
             const status = response.status;
             const errBody = await response.text().catch(() => "");
-            const err = new Error(`anthropic ${status} ${response.statusText}: ${errBody.slice(0, 500)}`);
+            const err = new AnthropicHttpError(
+                status,
+                errBody,
+                `anthropic ${status} ${response.statusText}: ${errBody.slice(0, 500)}`,
+            );
             lastError = err;
             if (isTransient(status) && attempt < this.maxRetries) {
                 await this._sleep(this.delaysMs[Math.min(attempt, this.delaysMs.length - 1)]!);

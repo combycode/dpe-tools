@@ -81,6 +81,7 @@ fn init_state_from_settings(raw: &Value) -> Result<(), String> {
     let settings: Settings = serde_json::from_value(raw.clone())
         .map_err(|e| format!("bad settings: {}", e))?;
     settings.output.validate().map_err(|e| format!("settings: {}", e))?;
+    settings.validate_model().map_err(|e| format!("settings: {}", e))?;
     let state = build_state(settings).map_err(|e| format!("init: {}", e))?;
     STATE.set(std::sync::Mutex::new(state))
          .map_err(|_| "tool state already initialised".to_string())
@@ -1110,12 +1111,7 @@ async fn run_per_page_batch(
         custom_ids.push(custom_id);
     }
 
-    let cfg = ModelCfg {
-        model: state.settings.model.clone(),
-        temperature: state.settings.temperature,
-        max_tokens: state.settings.max_tokens,
-        thinking_budget: state.settings.thinking_budget,
-    };
+    let cfg = ModelCfg::from_settings(&state.settings);
 
     ctx.log(&format!("batch: submitting {} pages", requests.len()), "info");
     let batch_id = state.provider.submit_batch(requests, &cfg).await
@@ -1513,12 +1509,7 @@ async fn call_provider_document(
     system: &str,
     pdf_bytes: Vec<u8>,
 ) -> Result<String, String> {
-    let cfg = ModelCfg {
-        model: state.settings.model.clone(),
-        temperature: state.settings.temperature,
-        max_tokens: state.settings.max_tokens,
-        thinking_budget: state.settings.thinking_budget,
-    };
+    let cfg = ModelCfg::from_settings(&state.settings);
     let user = UserContent::InlineDocument {
         bytes: pdf_bytes,
         mime: "application/pdf".to_string(),
@@ -1683,12 +1674,7 @@ async fn call_provider(
     image_bytes: Vec<u8>,
     mime: String,
 ) -> Result<String, String> {
-    let cfg = ModelCfg {
-        model: state.settings.model.clone(),
-        temperature: state.settings.temperature,
-        max_tokens: state.settings.max_tokens,
-        thinking_budget: state.settings.thinking_budget,
-    };
+    let cfg = ModelCfg::from_settings(&state.settings);
     let user = UserContent::InlineImage { bytes: image_bytes, mime, text: None };
     state.provider.message_single(system, user, &cfg).await
         .map_err(|e| format!("{}", e))
@@ -1758,7 +1744,7 @@ fn doc_cache_key_v2(
     let prompts_concat = prompts.join("\n\u{1F}---\u{1F}\n");
     let prompts_hash   = combycode_dpe::envelope::hash_string(&prompts_concat);
 
-    json!({
+    let mut key = json!({
         "file_hash":       file_hash,
         "total_pages":     total_pages,
         "selected_pages":  selected_pages,
@@ -1774,7 +1760,11 @@ fn doc_cache_key_v2(
         "max_tokens":      settings.max_tokens,
         "thinking_budget": settings.thinking_budget,
         "page_separator":  settings.output.page_separator,
-    })
+    });
+    // Added only when set, so keys (and caches) of existing settings stay the same.
+    if settings.thinking.is_some() { key["thinking"] = json!("adaptive"); }
+    if let Some(e) = settings.effort { key["effort"] = json!(e.as_str()); }
+    key
 }
 
 /// Known language tags the LLM may emit as an orphan first line
@@ -1898,8 +1888,8 @@ mod tests {
     fn build_tag_pairs_uses_pipeline_category_and_envelope_tag() {
         let settings = Settings {
             provider: ProviderKind::Anthropic,
-            model: "m".into(), temperature: 0.0, max_tokens: 1,
-            thinking_budget: None,
+            model: "m".into(), temperature: Some(0.0), max_tokens: 1,
+            thinking_budget: None, thinking: None, effort: None,
             prompts: combycode_dpe_tool_doc_converter::settings::PromptsCfg {
                 dir: "/".into(), name: "n".into(), version: "v".into()
             },
@@ -1942,8 +1932,8 @@ mod tests {
         defaults.insert("category".into(), "fallback".into());
         let settings = Settings {
             provider: ProviderKind::Anthropic,
-            model: "m".into(), temperature: 0.0, max_tokens: 1,
-            thinking_budget: None,
+            model: "m".into(), temperature: Some(0.0), max_tokens: 1,
+            thinking_budget: None, thinking: None, effort: None,
             prompts: combycode_dpe_tool_doc_converter::settings::PromptsCfg {
                 dir: "/".into(), name: "n".into(), version: "v".into()
             },
@@ -1980,8 +1970,8 @@ mod tests {
     fn output_settings(name: &str) -> Settings {
         Settings {
             provider: ProviderKind::Google,
-            model: "m".into(), temperature: 0.0, max_tokens: 1,
-            thinking_budget: None,
+            model: "m".into(), temperature: Some(0.0), max_tokens: 1,
+            thinking_budget: None, thinking: None, effort: None,
             prompts: combycode_dpe_tool_doc_converter::settings::PromptsCfg {
                 dir: "/".into(), name: "n".into(), version: "v".into()
             },
@@ -2185,9 +2175,11 @@ mod tests {
         Settings {
             provider,
             model: model.into(),
-            temperature,
+            temperature: Some(temperature),
             max_tokens: 1024,
             thinking_budget: None,
+            thinking: None,
+            effort: None,
             prompts: combycode_dpe_tool_doc_converter::settings::PromptsCfg {
                 dir: "/p".into(), name: "n".into(), version: "v".into(),
             },
@@ -2227,6 +2219,32 @@ mod tests {
         let a = doc_cache_key(&s, "abc123", &[1, 2], &["p1".into(), "p2".into()]);
         let b = doc_cache_key(&s, "abc123", &[1, 2], &["p1".into(), "p2".into()]);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn doc_cache_key_unchanged_for_existing_settings() {
+        // Settings written before `thinking` / `effort` existed must keep their key
+        // (and so their cache): same fields, temperature still the number 0.0.
+        let s = mk_settings(ProviderKind::Anthropic, "claude-x", 0.0);
+        let k = doc_cache_key(&s, "abc123", &[1, 2], &["p1".into()]);
+        let mut fields: Vec<&str> = k.as_object().unwrap().keys().map(|k| k.as_str()).collect();
+        fields.sort_unstable();
+        assert_eq!(fields, ["file_hash", "max_tokens", "model", "page_separator", "prompts_hash",
+                            "provider", "selected_pages", "strategy_kind", "temperature",
+                            "thinking_budget", "total_pages"]);
+        assert_eq!(k["temperature"].to_string(), "0.0");
+    }
+
+    #[test]
+    fn doc_cache_key_diverges_on_thinking_effort_and_null_temperature() {
+        use combycode_dpe_tool_doc_converter::settings::{Effort, ThinkingMode};
+        let base = mk_settings(ProviderKind::Anthropic, "claude-x", 0.0);
+        let key = |s: &Settings| doc_cache_key(s, "h", &[1], &["p".into()]);
+        let k0 = key(&base);
+        let mut t = base.clone(); t.thinking = Some(ThinkingMode::Adaptive);
+        let mut e = base.clone(); e.effort = Some(Effort::Low);
+        let mut n = base.clone(); n.temperature = None;
+        for other in [key(&t), key(&e), key(&n)] { assert_ne!(k0, other); }
     }
 
     #[test]
@@ -2708,9 +2726,11 @@ mod tests {
         Settings {
             provider: ProviderKind::Anthropic,
             model: "m".into(),
-            temperature: 0.0,
+            temperature: Some(0.0),
             max_tokens: 1024,
             thinking_budget: None,
+            thinking: None,
+            effort: None,
             prompts: combycode_dpe_tool_doc_converter::settings::PromptsCfg {
                 dir: prompts_dir.into(),
                 name: "convert".into(),

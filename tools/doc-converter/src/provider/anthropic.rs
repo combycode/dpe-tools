@@ -11,6 +11,8 @@ use async_trait::async_trait;
 use base64::{engine::general_purpose::STANDARD, Engine};
 use reqwest::Client;
 use serde_json::{json, Value};
+use std::collections::HashSet;
+use std::sync::{LazyLock, Mutex};
 use std::time::Duration;
 
 use crate::settings::RetryCfg;
@@ -68,20 +70,74 @@ impl AnthropicProvider {
 
     pub fn build_body(&self, system: &str, user: &UserContent, cfg: &ModelCfg) -> Value {
         let content = build_content_blocks(user);
-        let thinking_on = cfg.thinking_budget.unwrap_or(0) > 0;
-        let temperature = if thinking_on { 1.0 } else { cfg.temperature };
+        let budget_on = cfg.thinking_budget.unwrap_or(0) > 0;
         let mut body = json!({
             "model": cfg.model,
             "max_tokens": cfg.max_tokens,
             "system": system,
             "messages": [{"role": "user", "content": content}],
-            "temperature": temperature,
         });
-        if thinking_on {
+        // Adaptive thinking runs with the model's own sampling; with a thinking budget
+        // the API requires temperature 1. A model known to reject temperature gets none.
+        let temperature = if cfg.thinking_adaptive { None }
+                          else if budget_on { Some(1.0) }
+                          else { cfg.temperature };
+        if let Some(t) = temperature {
+            if !rejects_temperature(&cfg.model) {
+                body["temperature"] = json!(t);
+            }
+        }
+        if cfg.thinking_adaptive {
+            body["thinking"] = json!({"type": "adaptive"});
+        } else if budget_on {
             body["thinking"] = json!({"type": "enabled", "budget_tokens": cfg.thinking_budget});
+        }
+        if let Some(effort) = cfg.effort {
+            body["output_config"] = json!({"effort": effort});
         }
         body
     }
+
+    async fn post_message(&self, body: &Value) -> Result<String, ProviderError> {
+        retry_call(&self.retry, "anthropic.message_single", || async {
+            let resp = self.client.post(&self.endpoint)
+                .header("x-api-key", &self.api_key)
+                .header("anthropic-version", "2023-06-01")
+                .header("content-type", "application/json")
+                .json(body)
+                .send().await?;
+            let status = resp.status();
+            if !status.is_success() {
+                let body = resp.text().await.unwrap_or_default();
+                return Err(ProviderError::Api {
+                    provider: "anthropic",
+                    status: status.as_u16(),
+                    body: truncate(&body, 500),
+                });
+            }
+            let json: Value = resp.json().await?;
+            extract_text(&json)
+        }).await
+    }
+}
+
+/// Models that answered a request with a 400 about `temperature` (current Claude models
+/// accept no sampling parameters). Requests to them leave temperature out for the rest
+/// of the process.
+static NO_TEMPERATURE: LazyLock<Mutex<HashSet<String>>> = LazyLock::new(|| Mutex::new(HashSet::new()));
+
+fn rejects_temperature(model: &str) -> bool {
+    NO_TEMPERATURE.lock().map(|s| s.contains(model)).unwrap_or(false)
+}
+
+/// Remember the model; true the first time (so the caller logs once).
+fn mark_rejects_temperature(model: &str) -> bool {
+    NO_TEMPERATURE.lock().map(|mut s| s.insert(model.to_string())).unwrap_or(false)
+}
+
+/// A 400 whose message is about the temperature parameter.
+fn is_temperature_rejection(err: &ProviderError) -> bool {
+    matches!(err, ProviderError::Api { status: 400, body, .. } if body.to_ascii_lowercase().contains("temperature"))
 }
 
 fn build_content_blocks(user: &UserContent) -> Value {
@@ -171,25 +227,18 @@ impl Provider for AnthropicProvider {
         cfg: &ModelCfg,
     ) -> Result<String, ProviderError> {
         let body = self.build_body(system, &user, cfg);
-        retry_call(&self.retry, "anthropic.message_single", || async {
-            let resp = self.client.post(&self.endpoint)
-                .header("x-api-key", &self.api_key)
-                .header("anthropic-version", "2023-06-01")
-                .header("content-type", "application/json")
-                .json(&body)
-                .send().await?;
-            let status = resp.status();
-            if !status.is_success() {
-                let body = resp.text().await.unwrap_or_default();
-                return Err(ProviderError::Api {
-                    provider: "anthropic",
-                    status: status.as_u16(),
-                    body: truncate(&body, 500),
-                });
+        match self.post_message(&body).await {
+            Err(e) if body.get("temperature").is_some() && is_temperature_rejection(&e) => {
+                if mark_rejects_temperature(&cfg.model) {
+                    eprintln!(
+                        r#"{{"type":"log","level":"warn","msg":"anthropic: model {} rejects temperature; resending without it (set temperature: null to skip this)"}}"#,
+                        cfg.model.replace('"', "'"),
+                    );
+                }
+                self.post_message(&self.build_body(system, &user, cfg)).await
             }
-            let json: Value = resp.json().await?;
-            extract_text(&json)
-        }).await
+            other => other,
+        }
     }
 
     async fn submit_batch(
@@ -352,11 +401,18 @@ fn parse_batch_results_ndjson(body: &str) -> Result<Vec<BatchResult>, ProviderEr
                 }).map_err(|e| format!("{e}"))
             }
             "errored" => {
-                let msg = result_obj.get("error")
-                    .and_then(|e| e.get("message"))
+                // The error object is either `{type, message}` or wrapped as
+                // `{type: "error", error: {type, message}}`.
+                let err = result_obj.get("error");
+                let msg = err.and_then(|e| e.get("message"))
+                    .or_else(|| err.and_then(|e| e.get("error")).and_then(|e| e.get("message")))
                     .and_then(|m| m.as_str())
                     .unwrap_or("(no error message)");
-                Err(format!("provider error: {msg}"))
+                if msg.to_ascii_lowercase().contains("temperature") {
+                    Err(format!("provider error: {msg} (this model rejects temperature: set `temperature: null`)"))
+                } else {
+                    Err(format!("provider error: {msg}"))
+                }
             }
             "canceled" => Err("canceled".to_string()),
             "expired"  => Err("expired".to_string()),
@@ -376,9 +432,11 @@ mod tests {
     fn cfg() -> ModelCfg {
         ModelCfg {
             model: "claude-haiku-4-5-20251001".into(),
-            temperature: 0.0,
+            temperature: Some(0.0),
             max_tokens: 1000,
             thinking_budget: None,
+            thinking_adaptive: false,
+            effort: None,
         }
     }
 
@@ -638,5 +696,99 @@ mod tests {
 
         let other = ProviderError::Other("misc".into());
         assert!(!crate::provider::is_retryable(&other, all));
+    }
+
+    // ─── temperature / thinking / effort ─────────────────────────────
+
+    fn named(model: &str) -> ModelCfg { ModelCfg { model: model.into(), ..cfg() } }
+
+    #[test]
+    fn body_default_sends_temperature_zero() {
+        let p = AnthropicProvider::new_test("k".into());
+        let b = p.build_body("s", &UserContent::TextOnly("u".into()), &named("body-default"));
+        assert_eq!(b["temperature"], 0.0);
+        assert!(b.get("thinking").is_none() && b.get("output_config").is_none());
+    }
+
+    #[test]
+    fn body_temperature_null_is_not_sent() {
+        let p = AnthropicProvider::new_test("k".into());
+        let c = ModelCfg { temperature: None, ..named("body-null") };
+        assert!(p.build_body("s", &UserContent::TextOnly("u".into()), &c).get("temperature").is_none());
+    }
+
+    #[test]
+    fn body_adaptive_thinking_and_effort() {
+        let p = AnthropicProvider::new_test("k".into());
+        let c = ModelCfg { thinking_adaptive: true, effort: Some("low"), ..named("body-adaptive") };
+        let b = p.build_body("s", &UserContent::TextOnly("u".into()), &c);
+        assert_eq!(b["thinking"], json!({"type": "adaptive"}));
+        assert_eq!(b["output_config"], json!({"effort": "low"}));
+        assert!(b.get("temperature").is_none(), "adaptive thinking sends no temperature");
+    }
+
+    /// Matches requests whose JSON body has (or lacks) a `temperature` field.
+    struct HasTemperature(bool);
+    impl wiremock::Match for HasTemperature {
+        fn matches(&self, req: &wiremock::Request) -> bool {
+            serde_json::from_slice::<Value>(&req.body).map(|b| b.get("temperature").is_some() == self.0).unwrap_or(false)
+        }
+    }
+
+    #[tokio::test]
+    async fn temperature_rejection_is_retried_without_it_and_remembered() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/v1/messages")).and(HasTemperature(true))
+            .respond_with(ResponseTemplate::new(400).set_body_json(json!({
+                "type": "error",
+                "error": {"type": "invalid_request_error", "message": "`temperature` is deprecated for this model."}
+            })))
+            .expect(1)
+            .mount(&server).await;
+        Mock::given(method("POST")).and(path("/v1/messages")).and(HasTemperature(false))
+            .respond_with(ResponseTemplate::new(200).set_body_json(json!({"content": [{"type":"text","text":"ok"}]})))
+            .expect(2)
+            .mount(&server).await;
+        let p = AnthropicProvider::new_test("k".into()).with_endpoint(format!("{}/v1/messages", server.uri()));
+        let c = named("model-without-temperature");
+        assert_eq!(p.message_single("s", UserContent::TextOnly("u".into()), &c).await.unwrap(), "ok");
+        // Second call goes straight out without temperature (the 400 mock expects exactly one hit).
+        assert_eq!(p.message_single("s", UserContent::TextOnly("u".into()), &c).await.unwrap(), "ok");
+    }
+
+    #[tokio::test]
+    async fn other_400_is_not_retried() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("max_tokens: too large"))
+            .expect(1)
+            .mount(&server).await;
+        let p = AnthropicProvider::new_test("k".into()).with_endpoint(format!("{}/v1/messages", server.uri()));
+        let err = p.message_single("s", UserContent::TextOnly("u".into()), &named("other-400")).await.unwrap_err();
+        assert!(matches!(err, ProviderError::Api { status: 400, .. }));
+    }
+
+    #[tokio::test]
+    async fn temperature_null_never_retries() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("temperature: something else"))
+            .expect(1)
+            .mount(&server).await;
+        let p = AnthropicProvider::new_test("k".into()).with_endpoint(format!("{}/v1/messages", server.uri()));
+        let c = ModelCfg { temperature: None, ..named("null-no-retry") };
+        assert!(p.message_single("s", UserContent::TextOnly("u".into()), &c).await.is_err());
+    }
+
+    #[test]
+    fn batch_errored_reads_both_error_shapes_and_hints_temperature() {
+        let body = concat!(
+            r#"{"custom_id":"a","result":{"type":"errored","error":{"type":"error","error":{"type":"invalid_request_error","message":"`temperature` is deprecated for this model."}}}}"#, "\n",
+            r#"{"custom_id":"b","result":{"type":"errored","error":{"type":"invalid_request_error","message":"bad image"}}}"#, "\n",
+        );
+        let r = parse_batch_results_ndjson(body).unwrap();
+        let a = r[0].outcome.as_ref().unwrap_err();
+        assert!(a.contains("deprecated") && a.contains("temperature: null"), "{a}");
+        assert_eq!(r[1].outcome.as_ref().unwrap_err(), "provider error: bad image");
     }
 }

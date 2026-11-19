@@ -15,10 +15,11 @@ settings:
       required: true
       description: "Provider model name."
     temperature:
-      type: number
-      minimum: 0
-      maximum: 2
+      oneOf:
+        - { type: number, minimum: 0, maximum: 2 }
+        - { type: "null" }
       default: 0.0
+      description: "null: not sent (current Claude models reject it; a 400 about it is also retried without it)."
     max_tokens:
       type: integer
       minimum: 1
@@ -28,6 +29,14 @@ settings:
         - { type: integer, minimum: 0 }
         - { type: "null" }
       description: "Optional reasoning budget for providers that support it."
+    thinking:
+      type: string
+      enum: [adaptive]
+      description: "Anthropic only. Adaptive thinking for models that reject thinking_budget (mutually exclusive)."
+    effort:
+      type: string
+      enum: [low, medium, high, xhigh, max]
+      description: "Anthropic only. output_config.effort."
     prompts:
       type: object
       required: true

@@ -64,6 +64,7 @@ export interface HandlerDeps {
 }
 
 export function buildProvider(settings: Settings): ProviderClient {
+    validateModelSettings(settings);
     if (settings.provider === "anthropic") {
         const key = process.env.ANTHROPIC_API_KEY;
         if (!key) throw new Error("ANTHROPIC_API_KEY not set");
@@ -77,12 +78,32 @@ export function buildProvider(settings: Settings): ProviderClient {
     throw new Error(`unknown provider: ${(settings as any).provider}`);
 }
 
-function modelCfg(settings: Settings): ModelCfg {
+const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+
+/** Cross-field checks for the model settings; throws with a readable message. */
+export function validateModelSettings(settings: Settings): void {
+    if (settings.thinking !== undefined && settings.thinking !== "adaptive") {
+        throw new Error(`settings.thinking must be "adaptive", got ${JSON.stringify(settings.thinking)}`);
+    }
+    if (settings.effort !== undefined && !EFFORTS.includes(settings.effort)) {
+        throw new Error(`settings.effort must be one of ${EFFORTS.join("|")}, got ${JSON.stringify(settings.effort)}`);
+    }
+    if (settings.thinking !== undefined && settings.thinking_budget != null) {
+        throw new Error("settings: `thinking: adaptive` and `thinking_budget` are mutually exclusive");
+    }
+    if (settings.provider !== "anthropic" && (settings.thinking !== undefined || settings.effort !== undefined)) {
+        throw new Error("settings: `thinking` and `effort` are Anthropic-only settings");
+    }
+}
+
+export function modelCfg(settings: Settings): ModelCfg {
     return {
         model: settings.model,
-        temperature: settings.temperature ?? 0,
+        temperature: settings.temperature === undefined ? 0 : settings.temperature,
         max_tokens: settings.max_tokens ?? 64000,
         thinking_budget: settings.thinking_budget ?? null,
+        thinking_adaptive: settings.thinking === "adaptive",
+        effort: settings.effort ?? null,
     };
 }
 
@@ -130,9 +151,12 @@ export function providerCacheKey(
         user_hash: hashFn(userText),
         model: settings.model,
         provider: settings.provider,
-        temperature: settings.temperature ?? 0,
+        temperature: settings.temperature === undefined ? 0 : settings.temperature,
         max_tokens: settings.max_tokens ?? 64000,
         thinking_budget: settings.thinking_budget ?? null,
+        // Added only when set, so keys (and caches) of existing settings stay the same.
+        ...(settings.thinking !== undefined ? { thinking: settings.thinking } : {}),
+        ...(settings.effort !== undefined ? { effort: settings.effort } : {}),
     };
 }
 
