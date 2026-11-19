@@ -1,6 +1,6 @@
 //! Build an updateOne filter + update document from settings + envelope.
 
-use bson::{Bson, Document};
+use bson::{Bson, Decimal128, Document};
 use serde_json::Value;
 
 use crate::path::resolve_owned;
@@ -50,13 +50,22 @@ fn resolve_operation_value(env: &Value, op: &Operation) -> Value {
     }
 }
 
+/// An integer above i64::MAX (JSON numbers up to u64::MAX) as an exact Decimal128.
+fn u64_to_bson(u: u64) -> Bson {
+    match u.to_string().parse::<Decimal128>() {
+        Ok(d) => Bson::Decimal128(d),
+        Err(_) => Bson::Double(u as f64), // unreachable for a u64 digit string
+    }
+}
+
 pub fn to_bson(v: &Value) -> Bson {
     match v {
         Value::Null => Bson::Null,
         Value::Bool(b) => Bson::Boolean(*b),
         Value::Number(n) => {
             if let Some(i) = n.as_i64() { Bson::Int64(i) }
-            else if let Some(u) = n.as_u64() { Bson::Int64(u as i64) }
+            // Above i64::MAX: exact Decimal128, never a wrapped negative Int64.
+            else if let Some(u) = n.as_u64() { u64_to_bson(u) }
             else if let Some(f) = n.as_f64() { Bson::Double(f) }
             else { Bson::Null }
         }
@@ -188,5 +197,19 @@ mod tests {
         if let Bson::Array(a) = b {
             assert_eq!(a.len(), 3);
         } else { panic!(); }
+    }
+
+    #[test] fn to_bson_integer_boundaries() {
+        use bson::Decimal128;
+        let max = i64::MAX;
+        assert_eq!(to_bson(&serde_json::json!(max)), Bson::Int64(max));
+        assert_eq!(to_bson(&serde_json::json!(i64::MIN)), Bson::Int64(i64::MIN));
+        // Above i64::MAX: exact Decimal128, not a wrapped negative Int64.
+        let above = (i64::MAX as u64) + 1;
+        assert_eq!(to_bson(&serde_json::json!(above)),
+                   Bson::Decimal128("9223372036854775808".parse::<Decimal128>().unwrap()));
+        assert_eq!(to_bson(&serde_json::json!(u64::MAX)),
+                   Bson::Decimal128("18446744073709551615".parse::<Decimal128>().unwrap()));
+        assert_eq!(to_bson(&serde_json::json!(1.5)), Bson::Double(1.5));
     }
 }

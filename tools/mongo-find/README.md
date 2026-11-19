@@ -123,6 +123,8 @@ BSON-to-JSON conversions worth knowing:
 - `Decimal128(...)` -> `{"$numberDecimal": "<digits>"}`
 - `Long(...)` -> `<integer>` (when in i64 range) or `{"$numberLong": "<digits>"}`
 
+Filter values go the other way: numbers in `filter` / `filter_from` become: integers that fit a 64-bit signed integer -> `Int64`; larger integers (up to 18446744073709551615) -> an exact `Decimal128`; other numbers -> `Double`. JSON integers beyond that range already arrive as floating point when the envelope is parsed.
+
 If you need flat strings, normalise downstream (e.g. with a `filter`/`map` op extracting `_id.$oid`).
 
 ---

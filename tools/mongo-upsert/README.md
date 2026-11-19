@@ -97,6 +97,10 @@ on_error:  "trace"                          # "trace" | "drop" | "fail"
 | `bulk_size` | int | `500` | Number of envelopes per batch flush. `1` disables batching (one round-trip per envelope). Larger = fewer round-trips, more memory. |
 | `on_error` | enum | `"trace"` | `"trace"` (log + continue), `"drop"` (silently skip the failing op), `"fail"` (terminate the tool). Applies to write-side errors only — connection / auth failures always terminate. |
 
+### Value types
+
+JSON numbers become BSON as: integers that fit a 64-bit signed integer -> `Int64`; larger integers (up to 18446744073709551615) -> an exact `Decimal128`; other numbers -> `Double`. JSON integers beyond that range already arrive as floating point when the envelope is parsed. The same applies to `key` values, so an upsert matches the document with exactly that key.
+
 ---
 
 ## Operators

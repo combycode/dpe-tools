@@ -194,3 +194,21 @@ async fn find_returns_nothing_when_empty() {
     assert!(docs.is_empty());
     coll.drop().await.ok();
 }
+
+#[tokio::test]
+async fn per_input_filter_above_i64_max_matches_exactly() {
+    // A filter value above i64::MAX must not wrap to -1 (which matched the wrong document).
+    let Some(client) = try_client().await else { return; };
+    let name = unique_coll_name("u64_find");
+    let coll = client.database("dpe_test").collection::<Document>(&name);
+    let big: mongodb::bson::Decimal128 = "18446744073709551615".parse().unwrap();
+    populate(&coll, vec![doc!{"id": -1_i64, "tag": "minus-one"}, doc!{"id": big, "tag": "big"}]).await;
+    let mut s = base_settings(&name);
+    s.mode = Mode::PerInput;
+    s.filter_from.insert("id".into(), "v.id".into());
+    let docs = coll.find(filter_per_input(&json!({"v": {"id": u64::MAX}}), &s)).await.unwrap()
+        .try_collect::<Vec<Document>>().await.unwrap();
+    assert_eq!(docs.len(), 1);
+    assert_eq!(docs[0].get_str("tag").unwrap(), "big");
+    coll.drop().await.ok();
+}

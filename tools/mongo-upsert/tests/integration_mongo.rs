@@ -217,3 +217,27 @@ async fn missing_value_path_null() {
 
     coll.drop().await.ok();
 }
+
+#[tokio::test]
+async fn key_above_i64_max_never_touches_the_minus_one_document() {
+    // Before: u64::MAX wrapped to Int64 -1 in both the filter and the stored value, so the
+    // upsert below updated the unrelated document whose id is -1.
+    let Some(client) = try_client().await else { return; };
+    let coll_name = unique_coll_name("u64");
+    let coll = client.database("dpe_test").collection::<Document>(&coll_name);
+    coll.insert_one(doc! {"id": -1_i64, "amount": "untouched"}).await.unwrap();
+
+    let mut key = BTreeMap::new();
+    key.insert("id".into(), "v.id".into());
+    let ops = vec![Operation { op: OperatorKind::Set, path: "amount".into(), value: Some("v.amount".into()), literal: None }];
+    let s = settings_for(&coll_name, ops, key);
+    apply_envelope(&coll, &json!({"v": {"id": u64::MAX, "amount": u64::MAX}}), &s).await;
+
+    let minus_one = coll.find_one(doc! {"id": -1_i64}).await.unwrap().unwrap();
+    assert_eq!(minus_one.get_str("amount").unwrap(), "untouched");
+    let big: mongodb::bson::Decimal128 = "18446744073709551615".parse().unwrap();
+    let stored = coll.find_one(doc! {"id": big}).await.unwrap().expect("document stored under the exact key");
+    assert_eq!(stored.get("amount"), Some(&mongodb::bson::Bson::Decimal128(big)));
+    assert_eq!(coll.count_documents(doc! {}).await.unwrap(), 2);
+    coll.drop().await.ok();
+}
