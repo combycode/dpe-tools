@@ -5,7 +5,7 @@
     "": {
       "name": "@combycode/dpe-tool-classify",
       "dependencies": {
-        "@combycode/dpe-framework-ts": "^2.0.4",
+        "@combycode/dpe-framework-ts": "^2.1.0",
       },
       "devDependencies": {
         "@types/bun": "^1.4.4",
@@ -15,7 +15,7 @@
     },
   },
   "packages": {
-    "@combycode/dpe-framework-ts": ["@combycode/dpe-framework-ts@2.0.4", "", {}, "sha512-RcsW2tsM8Nsi9MvFXW31pgqbI0KxsFAV0bmqCGK73IZHmfaQXYvXXu+U9ATDjLSpM9gW3rwHs9tgc1OjFvdh9Q=="],
+    "@combycode/dpe-framework-ts": ["@combycode/dpe-framework-ts@2.1.0", "", {}, "sha512-4Xy9eS0ulA+mY/cUydLOMCI2oydFbYQV9Z9rsrZVNHKJbTAdGWIFIpzKSSeh1kbDVevY5mJOmqBa0nNTwb3WPA=="],
 
     "@types/bun": ["@types/bun@1.4.4", "", { "dependencies": { "bun-types": "1.4.4" } }, "sha512-9wkRDXUXK124pEnAutE6n/l18j+i9GC5IAHK8TmX/2nlySETmky0OU6yL5U8pW1AoKh++AN9auDCr647BfurjQ=="],
 

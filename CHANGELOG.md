@@ -6,7 +6,9 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 
 ## [Unreleased]
 
-First public release of the curated DPE tool set.
+## [0.1.0] — 2026-11-19
+
+First public release of the curated DPE tool set. Built on the DPE 2.1.0 frameworks, so the tools honour `path_tokens`.
 
 ### Added
 
@@ -30,3 +32,6 @@ First public release of the curated DPE tool set.
 - **llm**: JSON output keeps the input's source-identity fields when the model does not return them.
 - **doc-converter**, **llm**: current Claude models. `temperature: null` leaves the parameter out; a 400 about `temperature` is retried once without it and remembered for that model (older models keep the configured value, default `0.0`). New Anthropic-only settings `thinking: adaptive` (instead of `thinking_budget`, which these models reject) and `effort: low|medium|high|xhigh|max`.
 - Repository: `LICENSE` (AGPL-3.0), `CONTRIBUTING.md`, `SECURITY.md`, `CODE_OF_CONDUCT.md`, issue and PR templates, CI on Linux / Windows / macOS.
+
+[Unreleased]: https://github.com/combycode/dpe-tools/compare/v0.1.0...HEAD
+[0.1.0]: https://github.com/combycode/dpe-tools/releases/tag/v0.1.0
