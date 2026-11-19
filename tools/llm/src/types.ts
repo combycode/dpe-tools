@@ -48,9 +48,9 @@ export interface Settings {
     max_tokens?: number;
     thinking_budget?: number | null;
     /** Anthropic only: `adaptive` sends `thinking: {type: "adaptive"}`. Excludes `thinking_budget`. */
-    thinking?: "adaptive";
+    thinking?: "adaptive" | null;
     /** Anthropic only: `output_config.effort`. */
-    effort?: Effort;
+    effort?: Effort | null;
 
     prompts: PromptsCfg;
 

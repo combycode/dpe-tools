@@ -138,3 +138,11 @@ test("Google: 400 is NOT retried", async () => {
     await expect(p.messageSingle("s", "u", BASE_CFG)).rejects.toThrow(/400/);
     expect(calls).toBe(1);
 });
+
+test("Google: temperature null is not sent", () => {
+    const p = new GoogleProvider({ apiKey: "k", fetch: (async () => new Response()) as any });
+    expect(p.buildBody("S", "U", { ...BASE_CFG, temperature: null }).generationConfig).not.toHaveProperty(
+        "temperature",
+    );
+    expect(p.buildBody("S", "U", BASE_CFG).generationConfig.temperature).toBe(0);
+});

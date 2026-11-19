@@ -82,16 +82,16 @@ const EFFORTS = ["low", "medium", "high", "xhigh", "max"];
 
 /** Cross-field checks for the model settings; throws with a readable message. */
 export function validateModelSettings(settings: Settings): void {
-    if (settings.thinking !== undefined && settings.thinking !== "adaptive") {
+    if (settings.thinking != null && settings.thinking !== "adaptive") {
         throw new Error(`settings.thinking must be "adaptive", got ${JSON.stringify(settings.thinking)}`);
     }
-    if (settings.effort !== undefined && !EFFORTS.includes(settings.effort)) {
+    if (settings.effort != null && !EFFORTS.includes(settings.effort)) {
         throw new Error(`settings.effort must be one of ${EFFORTS.join("|")}, got ${JSON.stringify(settings.effort)}`);
     }
-    if (settings.thinking !== undefined && settings.thinking_budget != null) {
+    if (settings.thinking != null && (settings.thinking_budget ?? 0) > 0) {
         throw new Error("settings: `thinking: adaptive` and `thinking_budget` are mutually exclusive");
     }
-    if (settings.provider !== "anthropic" && (settings.thinking !== undefined || settings.effort !== undefined)) {
+    if (settings.provider !== "anthropic" && (settings.thinking != null || settings.effort != null)) {
         throw new Error("settings: `thinking` and `effort` are Anthropic-only settings");
     }
 }
@@ -155,8 +155,8 @@ export function providerCacheKey(
         max_tokens: settings.max_tokens ?? 64000,
         thinking_budget: settings.thinking_budget ?? null,
         // Added only when set, so keys (and caches) of existing settings stay the same.
-        ...(settings.thinking !== undefined ? { thinking: settings.thinking } : {}),
-        ...(settings.effort !== undefined ? { effort: settings.effort } : {}),
+        ...(settings.thinking != null ? { thinking: settings.thinking } : {}),
+        ...(settings.effort != null ? { effort: settings.effort } : {}),
     };
 }
 

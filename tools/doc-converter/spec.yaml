@@ -29,12 +29,14 @@ settings:
       minimum: 0
       description: "Optional reasoning budget (Anthropic extended thinking)."
     thinking:
-      type: string
-      enum: [adaptive]
+      oneOf:
+        - { type: string, enum: [adaptive] }
+        - { type: "null" }
       description: "Anthropic only. Adaptive thinking for models that reject thinking_budget (mutually exclusive)."
     effort:
-      type: string
-      enum: [low, medium, high, xhigh, max]
+      oneOf:
+        - { type: string, enum: [low, medium, high, xhigh, max] }
+        - { type: "null" }
       description: "Anthropic only. output_config.effort."
     prompts:
       type: object

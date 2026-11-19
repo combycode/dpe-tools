@@ -602,4 +602,12 @@ mod tests {
             _ => panic!("wrong error variant"),
         }
     }
+
+    #[test]
+    fn temperature_null_is_not_sent() {
+        let p = GoogleProvider::new_test("k".into());
+        let b = p.build_body("s", &UserContent::TextOnly("u".into()), &ModelCfg { temperature: None, ..cfg() });
+        assert!(b["generationConfig"].get("temperature").is_none());
+        assert_eq!(p.build_body("s", &UserContent::TextOnly("u".into()), &cfg())["generationConfig"]["temperature"], 0.0);
+    }
 }

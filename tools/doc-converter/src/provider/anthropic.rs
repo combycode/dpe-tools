@@ -79,8 +79,9 @@ impl AnthropicProvider {
         });
         // Adaptive thinking runs with the model's own sampling; with a thinking budget
         // the API requires temperature 1. A model known to reject temperature gets none.
+        // `temperature: null` wins over the thinking-budget rule.
         let temperature = if cfg.thinking_adaptive { None }
-                          else if budget_on { Some(1.0) }
+                          else if budget_on { cfg.temperature.map(|_| 1.0) }
                           else { cfg.temperature };
         if let Some(t) = temperature {
             if !rejects_temperature(&cfg.model) {
@@ -135,9 +136,12 @@ fn mark_rejects_temperature(model: &str) -> bool {
     NO_TEMPERATURE.lock().map(|mut s| s.insert(model.to_string())).unwrap_or(false)
 }
 
-/// A 400 whose message is about the temperature parameter.
-fn is_temperature_rejection(err: &ProviderError) -> bool {
-    matches!(err, ProviderError::Api { status: 400, body, .. } if body.to_ascii_lowercase().contains("temperature"))
+/// A 400 whose message is about the temperature parameter, for a request whose
+/// temperature was in the valid 0..=1 range (an out-of-range value is a config error
+/// the caller must see, not a model that rejects temperature).
+fn is_temperature_rejection(err: &ProviderError, sent: &Value) -> bool {
+    let in_range = sent.get("temperature").and_then(|t| t.as_f64()).is_some_and(|t| (0.0..=1.0).contains(&t));
+    in_range && matches!(err, ProviderError::Api { status: 400, body, .. } if body.to_ascii_lowercase().contains("temperature"))
 }
 
 fn build_content_blocks(user: &UserContent) -> Value {
@@ -228,7 +232,7 @@ impl Provider for AnthropicProvider {
     ) -> Result<String, ProviderError> {
         let body = self.build_body(system, &user, cfg);
         match self.post_message(&body).await {
-            Err(e) if body.get("temperature").is_some() && is_temperature_rejection(&e) => {
+            Err(e) if is_temperature_rejection(&e, &body) => {
                 if mark_rejects_temperature(&cfg.model) {
                     eprintln!(
                         r#"{{"type":"log","level":"warn","msg":"anthropic: model {} rejects temperature; resending without it (set temperature: null to skip this)"}}"#,
@@ -790,5 +794,28 @@ mod tests {
         let a = r[0].outcome.as_ref().unwrap_err();
         assert!(a.contains("deprecated") && a.contains("temperature: null"), "{a}");
         assert_eq!(r[1].outcome.as_ref().unwrap_err(), "provider error: bad image");
+    }
+
+    #[test]
+    fn body_temperature_null_also_with_thinking_budget() {
+        let p = AnthropicProvider::new_test("k".into());
+        let with_t = ModelCfg { thinking_budget: Some(2000), ..named("budget-default") };
+        assert_eq!(p.build_body("s", &UserContent::TextOnly("u".into()), &with_t)["temperature"], 1.0);
+        let null_t = ModelCfg { thinking_budget: Some(2000), temperature: None, ..named("budget-null") };
+        assert!(p.build_body("s", &UserContent::TextOnly("u".into()), &null_t).get("temperature").is_none());
+    }
+
+    #[tokio::test]
+    async fn out_of_range_temperature_is_a_config_error_not_retried() {
+        let server = MockServer::start().await;
+        Mock::given(method("POST")).and(path("/v1/messages"))
+            .respond_with(ResponseTemplate::new(400).set_body_string("temperature: range: 0..1"))
+            .expect(1)
+            .mount(&server).await;
+        let p = AnthropicProvider::new_test("k".into()).with_endpoint(format!("{}/v1/messages", server.uri()));
+        let c = ModelCfg { temperature: Some(1.5), ..named("out-of-range") };
+        assert!(matches!(p.message_single("s", UserContent::TextOnly("u".into()), &c).await,
+                         Err(ProviderError::Api { status: 400, .. })));
+        assert!(!rejects_temperature("out-of-range"), "a bad value must not mark the model");
     }
 }

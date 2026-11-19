@@ -400,6 +400,12 @@ describe("providerCacheKey", () => {
         expect(k.temperature).toBe(0);
     });
 
+    test("thinking/effort null keep the key of settings without them", () => {
+        expect(providerCacheKey("sys", "user", { ...baseSettings, thinking: null, effort: null }, h)).toEqual(
+            providerCacheKey("sys", "user", baseSettings, h),
+        );
+    });
+
     test("diverges on thinking, effort and temperature null", () => {
         const k0 = providerCacheKey("sys", "user", baseSettings, h);
         for (const extra of [{ thinking: "adaptive" as const }, { effort: "low" as const }, { temperature: null }]) {
@@ -743,5 +749,11 @@ describe("model settings", () => {
         expect(() => validateModelSettings({ ...base, effort: "extreme" as any })).toThrow("effort must be one of");
         expect(() => validateModelSettings({ ...base, thinking: "on" as any })).toThrow('must be "adaptive"');
         expect(() => validateModelSettings({ ...base, provider: "google", effort: "low" })).toThrow("Anthropic-only");
+        // The README template writes them as null: that means unset.
+        expect(() => validateModelSettings({ ...base, thinking: null, effort: null })).not.toThrow();
+        expect(() =>
+            validateModelSettings({ ...base, provider: "google", thinking: null, effort: null }),
+        ).not.toThrow();
+        expect(() => validateModelSettings({ ...base, thinking: "adaptive", thinking_budget: 0 })).not.toThrow();
     });
 });

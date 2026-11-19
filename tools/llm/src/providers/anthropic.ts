@@ -32,9 +32,14 @@ export interface AnthropicOpts {
 /** Models that answered with a 400 about `temperature`; requests to them leave it out. */
 const NO_TEMPERATURE = new Set<string>();
 
-/** True for a 400 whose error text is about the temperature parameter. */
-export function isTemperatureRejection(status: number, body: string): boolean {
-    return status === 400 && body.toLowerCase().includes("temperature");
+/**
+ * True for a 400 whose error text is about the temperature parameter, for a request whose
+ * temperature was in the valid 0..1 range (an out-of-range value is a config error the
+ * caller must see, not a model that rejects temperature).
+ */
+export function isTemperatureRejection(status: number, body: string, sentTemperature: unknown): boolean {
+    const inRange = typeof sentTemperature === "number" && sentTemperature >= 0 && sentTemperature <= 1;
+    return inRange && status === 400 && body.toLowerCase().includes("temperature");
 }
 
 class AnthropicHttpError extends Error {
@@ -72,7 +77,14 @@ export class AnthropicProvider implements ProviderClient {
         };
         // Adaptive thinking runs with the model's own sampling; with a thinking budget the
         // API requires temperature 1. A model known to reject temperature gets none.
-        const temperature = cfg.thinking_adaptive ? null : budgetOn ? 1 : cfg.temperature;
+        // `temperature: null` wins over the thinking-budget rule.
+        const temperature = cfg.thinking_adaptive
+            ? null
+            : budgetOn
+              ? cfg.temperature === null
+                  ? null
+                  : 1
+              : cfg.temperature;
         if (temperature !== null && !NO_TEMPERATURE.has(cfg.model)) body.temperature = temperature;
         if (cfg.thinking_adaptive) body.thinking = { type: "adaptive" };
         else if (budgetOn) body.thinking = { type: "enabled", budget_tokens: cfg.thinking_budget };
@@ -85,11 +97,7 @@ export class AnthropicProvider implements ProviderClient {
         try {
             return await this.post(body);
         } catch (e) {
-            if (
-                !("temperature" in body) ||
-                !(e instanceof AnthropicHttpError) ||
-                !isTemperatureRejection(e.status, e.body)
-            ) {
+            if (!(e instanceof AnthropicHttpError) || !isTemperatureRejection(e.status, e.body, body.temperature)) {
                 throw e;
             }
             if (!NO_TEMPERATURE.has(cfg.model)) {

@@ -199,12 +199,47 @@ describe("temperature, adaptive thinking and effort", () => {
         expect(body).not.toHaveProperty("temperature");
     });
 
-    test("isTemperatureRejection only for 400 about temperature", () => {
-        expect(isTemperatureRejection(400, '{"error":{"message":"`temperature` is deprecated for this model."}}')).toBe(
-            true,
+    test("isTemperatureRejection only for a 400 about an in-range temperature", () => {
+        const msg = '{"error":{"message":"`temperature` is deprecated for this model."}}';
+        expect(isTemperatureRejection(400, msg, 0)).toBe(true);
+        expect(isTemperatureRejection(400, "max_tokens too large", 0)).toBe(false);
+        expect(isTemperatureRejection(500, "temperature", 0)).toBe(false);
+        expect(isTemperatureRejection(400, "temperature: range 0..1", 1.5)).toBe(false);
+        expect(isTemperatureRejection(400, msg, undefined)).toBe(false);
+    });
+
+    test("temperature null also wins over the thinking-budget rule", () => {
+        const p = new AnthropicProvider({ apiKey: "t", fetch: noFetch });
+        expect(p.buildBody("S", "U", { ...BASE_CFG, model: "m-b1", thinking_budget: 2000 }).temperature).toBe(1);
+        expect(
+            p.buildBody("S", "U", { ...BASE_CFG, model: "m-b2", thinking_budget: 2000, temperature: null }),
+        ).not.toHaveProperty("temperature");
+    });
+
+    test("temperature null is never retried", async () => {
+        let calls = 0;
+        const fetchFn = (async () => {
+            calls++;
+            return new Response("temperature: something", { status: 400 });
+        }) as any;
+        const p = new AnthropicProvider({ apiKey: "t", fetch: fetchFn, retry: { max_retries: 0 } });
+        await expect(
+            p.messageSingle("S", "U", { ...BASE_CFG, model: "m-null-400", temperature: null }),
+        ).rejects.toThrow("400");
+        expect(calls).toBe(1);
+    });
+
+    test("out-of-range temperature is a config error, not retried", async () => {
+        let calls = 0;
+        const fetchFn = (async () => {
+            calls++;
+            return new Response("temperature: range 0..1", { status: 400 });
+        }) as any;
+        const p = new AnthropicProvider({ apiKey: "t", fetch: fetchFn, retry: { max_retries: 0 } });
+        await expect(p.messageSingle("S", "U", { ...BASE_CFG, model: "m-range", temperature: 1.5 })).rejects.toThrow(
+            "400",
         );
-        expect(isTemperatureRejection(400, "max_tokens too large")).toBe(false);
-        expect(isTemperatureRejection(500, "temperature")).toBe(false);
+        expect(calls).toBe(1);
     });
 
     test("a 400 about temperature is retried without it, then remembered for the model", async () => {

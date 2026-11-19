@@ -130,11 +130,11 @@ on_failure:      "stderr"                  # "stderr" (default) | "envelope" | "
 
 ### Current Claude models: `temperature`, `thinking`, `effort`
 
-Current Claude models (Opus 4.7 and later, Sonnet 5 and later, Haiku 5.5, Fable) accept no sampling parameters and reject a `thinking_budget`:
+Current Claude models restrict sampling parameters: some reject `temperature` outright, others accept only its default value. The newest ones (e.g. Opus 5.5, Sonnet 5.5, Haiku 5.5) also reject `thinking_budget`. Check the model's documentation; the tool handles the common cases:
 
-- **`temperature`** — when the API answers a request with a 400 about `temperature`, the tool sends the request again without it and leaves it out for that model for the rest of the run (one `warn` log line). Set `temperature: null` to never send it. Older models keep receiving the configured value (default `0.0`), as before.
+- **`temperature`** — when the API answers a request whose `temperature` is within `0.0`-`1.0` with a 400 about `temperature`, the tool sends the request again without it and leaves it out for that model for the rest of the run (one `warn` log line). Set `temperature: null` to never send it. Older models keep receiving the configured value (default `0.0`), as before; an out-of-range value is still reported as an error. `temperature: null` also applies with `thinking_budget` (which otherwise sends `1.0`).
 - **`thinking: adaptive`** — sends `thinking: {type: "adaptive"}`: the model decides how much to reason. Use it instead of `thinking_budget` on models that reject budgets; the two are mutually exclusive. No temperature is sent with it.
-- **`effort`** — `low` | `medium` | `high` | `xhigh` | `max`, sent as `output_config.effort`: how much the model reasons and writes. Leave it unset to use the model's default.
+- **`effort`** — `low` | `medium` | `high` | `xhigh` | `max`, sent as `output_config.effort`: how much the model reasons and writes. Leave it unset to use the model's default; older models (e.g. Haiku 4.5) reject it.
 
 `thinking` and `effort` are Anthropic-only; setting them with `provider: google` is a startup error.
 

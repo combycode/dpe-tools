@@ -130,7 +130,7 @@ impl Effort {
 impl Settings {
     /// Cross-field checks for the model settings.
     pub fn validate_model(&self) -> Result<(), String> {
-        if self.thinking.is_some() && self.thinking_budget.is_some() {
+        if self.thinking.is_some() && self.thinking_budget.unwrap_or(0) > 0 {
             return Err("`thinking: adaptive` and `thinking_budget` are mutually exclusive".into());
         }
         if self.provider != ProviderKind::Anthropic && (self.thinking.is_some() || self.effort.is_some()) {
@@ -787,5 +787,11 @@ mod tests {
         }"#;
         let st: Settings = serde_json::from_str(s).unwrap();
         assert!(st.validate_model().unwrap_err().contains("Anthropic-only"));
+    }
+
+    #[test]
+    fn adaptive_with_zero_budget_is_accepted() {
+        assert!(with(r#", "thinking": "adaptive", "thinking_budget": 0"#).is_ok());
+        assert!(with(r#", "thinking": null, "effort": null"#).is_ok());
     }
 }
