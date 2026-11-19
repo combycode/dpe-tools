@@ -7,9 +7,10 @@
 #
 # Inputs:
 #   --tarball-dir <DIR>      Directory containing per-platform tarballs named
-#                            <tool>-<os>-<arch>.tar.gz. Required.
+#                            <tool>-<os>-<arch>.tar.gz (scripts/stage-tarball.sh). Required.
 #   --version <VER>          Semver tag (e.g. 0.1.0 or 0.1.0-rc1). Required.
-#   --url-template <TMPL>    Template with {name}, {version}, {os}, {arch}.
+#   --url-template <TMPL>    Template with {name}, {version}, {os}, {arch}. {name} is filled
+#                            in here (dpe install substitutes only {os}/{arch}/{version}).
 #                            Default: GH Releases URL for combycode/dpe-tools.
 #   --output <FILE>          Where to write catalog.json. Default: stdout.
 #
@@ -59,11 +60,11 @@ sha256_of() {
 # Platforms we expect tarballs for. If a platform tarball is missing we skip
 # its sha256 entry; runner will warn at install time on the missing platform.
 PLATFORMS=(
-    "linux-x64"
+    "linux-amd64"
     "linux-arm64"
-    "darwin-x64"
+    "darwin-amd64"
     "darwin-arm64"
-    "windows-x64"
+    "windows-amd64"
 )
 
 # Collect tools from tools/*/meta.json. jq is required for clean JSON building.
@@ -91,7 +92,7 @@ for meta in "$ROOT"/tools/*/meta.json; do
         --arg runtime "$runtime" \
         --arg ver     "$VERSION" \
         --arg name    "$name" \
-        --arg url     "$URL_TEMPLATE" \
+        --arg url     "${URL_TEMPLATE//\{name\}/$name}" \
         --argjson sha "$sha_map" \
         '{
             description: $desc,

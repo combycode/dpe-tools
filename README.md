@@ -140,11 +140,11 @@ A catalog is a JSON file shaped like:
         "name": "xlsx",
         "url_template": "https://github.com/combycode/dpe-tools/releases/download/v{version}/xlsx-{os}-{arch}.tar.gz",
         "sha256": {
-          "linux-x64":   "...",
-          "linux-arm64": "...",
-          "darwin-x64":  "...",
-          "darwin-arm64":"...",
-          "windows-x64": "..."
+          "linux-amd64":   "...",
+          "linux-arm64":   "...",
+          "darwin-amd64":  "...",
+          "darwin-arm64":  "...",
+          "windows-amd64": "..."
         }
       }
     }
