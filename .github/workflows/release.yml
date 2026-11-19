@@ -60,7 +60,7 @@ jobs:
         if: matrix.platform == 'linux-arm64'
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu
+          sudo apt-get install -y --no-install-recommends gcc-aarch64-linux-gnu libc6-dev-arm64-cross
           mkdir -p .cargo
           {
             echo '[target.aarch64-unknown-linux-gnu]'
@@ -92,6 +92,12 @@ jobs:
         shell: bash
         run: |
           mkdir -p stage
+          # The flags below are GNU tar; macOS ships bsdtar, so use gtar there.
+          TAR=tar
+          if [ "$RUNNER_OS" = macOS ]; then
+              command -v gtar >/dev/null || brew install gnu-tar
+              TAR=gtar
+          fi
           TARDET=(--sort=name --mtime='@1700000000'
                   --owner=0 --group=0 --numeric-owner
                   --use-compress-program='gzip -n')
@@ -119,7 +125,7 @@ jobs:
               cp "$tool_dir/meta.json"  "$workdir/$tool/meta.json"
               cp "$tool_dir/spec.yaml"  "$workdir/$tool/spec.yaml"
               cp "$tool_dir/README.md"  "$workdir/$tool/README.md"
-              tar "${TARDET[@]}" -cf "stage/${tool}-${{ matrix.platform }}.tar.gz" \
+              "$TAR" "${TARDET[@]}" -cf "stage/${tool}-${{ matrix.platform }}.tar.gz" \
                   -C "$workdir" "$tool"
           done
 
